@@ -42,9 +42,21 @@ export interface IdempotencyRecord {
   /** JSON-serialized response body, ready to be parsed and replayed. */
   responseBody?: string;
 
-  /** When the record was first created. */
+  /**
+   * When the record was first created by `IdempotencyStorage.create()`.
+   *
+   * **Invariant**: this field is IMMUTABLE over the lifetime of a record.
+   * `complete()` and any other mutation MUST preserve the original value.
+   * Storage adapters that rewrite `createdAt` on update are non-conformant
+   * and WILL break consumers who use it for monitoring (e.g. first-seen
+   * timestamps in metrics / audit trails).
+   */
   createdAt: Date;
 
-  /** When the record will be evicted by the storage adapter. */
+  /**
+   * When the record will be evicted by the storage adapter.
+   * Unlike `createdAt`, this field IS mutated on `complete()` when the
+   * adapter refreshes the TTL window to the new (typically longer) value.
+   */
   expiresAt: Date;
 }

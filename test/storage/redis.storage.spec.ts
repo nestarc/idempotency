@@ -2,8 +2,25 @@ import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 
 import { RedisStorage } from '../../src/storage/redis.storage';
+import { describeStorageContract } from '../support/shared-storage-contract';
 
 const buildClient = () => new RedisMock() as unknown as Redis;
+
+// Plug RedisStorage into the shared behavioral contract suite. Each test
+// gets a fresh mock client and the storage is torn down via onModuleDestroy
+// (which delegates to close()).
+describeStorageContract('RedisStorage', async () => {
+  const client = buildClient();
+  await client.flushall();
+  const storage = new RedisStorage({ client });
+  return {
+    storage,
+    cleanup: async () => {
+      await client.flushall();
+      await client.quit();
+    },
+  };
+});
 
 describe('RedisStorage', () => {
   let client: Redis;

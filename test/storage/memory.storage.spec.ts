@@ -1,4 +1,18 @@
 import { MemoryStorage } from '../../src/storage/memory.storage';
+import { describeStorageContract } from '../support/shared-storage-contract';
+
+// Plug MemoryStorage into the shared behavioral contract suite.
+// Uses real timers so the contract's async createdAt test runs unaffected
+// by the per-test fake-timer setup below.
+describeStorageContract('MemoryStorage', async () => {
+  const storage = new MemoryStorage();
+  return {
+    storage,
+    cleanup: async () => {
+      await storage.onModuleDestroy();
+    },
+  };
+});
 
 describe('MemoryStorage', () => {
   let storage: MemoryStorage;
@@ -52,8 +66,13 @@ describe('MemoryStorage', () => {
   });
 
   describe('complete', () => {
-    it('transitions PROCESSING to COMPLETED and refreshes TTL', async () => {
+    it('transitions PROCESSING to COMPLETED and refreshes the expiresAt window', async () => {
       const { token } = await storage.create('k1', 'fp', 10);
+      const originalCreatedAt = (await storage.get('k1'))!.createdAt.getTime();
+      // Advance the fake clock so a naive "createdAt = now" would be detectable.
+      jest.advanceTimersByTime(1_000);
+      const beforeComplete = Date.now();
+
       const result = await storage.complete(
         'k1',
         token!,
@@ -66,9 +85,11 @@ describe('MemoryStorage', () => {
       expect(record!.status).toBe('COMPLETED');
       expect(record!.statusCode).toBe(201);
       expect(record!.responseBody).toBe('{"id":"abc"}');
-      const lifetimeMs =
-        record!.expiresAt.getTime() - record!.createdAt.getTime();
-      expect(lifetimeMs).toBe(60_000);
+
+      // createdAt is IMMUTABLE — it must still equal the original.
+      expect(record!.createdAt.getTime()).toBe(originalCreatedAt);
+      // expiresAt is REFRESHED to (now + ttlSeconds).
+      expect(record!.expiresAt.getTime()).toBe(beforeComplete + 60_000);
     });
 
     it('returns "stale" when the key does not exist', async () => {
@@ -88,8 +109,10 @@ describe('MemoryStorage', () => {
       jest.advanceTimersByTime(1_100);
       // Request B creates a fresh record for the same key.
       const b = await storage.create('k1', 'fpB', 60);
+      const bCreatedAt = (await storage.get('k1'))!.createdAt.getTime();
       expect(b.acquired).toBe(true);
       expect(b.token).not.toBe(a.token);
+
       // Request A (which had the short ttl) now tries to complete.
       // Its token no longer matches the stored record — storage MUST refuse.
       const result = await storage.complete(
@@ -100,12 +123,13 @@ describe('MemoryStorage', () => {
       );
       expect(result).toBe('stale');
 
-      // Verify B's record was NOT clobbered.
+      // Verify B's record was NOT clobbered, including createdAt.
       const record = await storage.get('k1');
       expect(record!.token).toBe(b.token);
       expect(record!.fingerprint).toBe('fpB');
       expect(record!.responseBody).toBeUndefined();
       expect(record!.status).toBe('PROCESSING');
+      expect(record!.createdAt.getTime()).toBe(bCreatedAt);
     });
   });
 

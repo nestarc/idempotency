@@ -89,9 +89,9 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
       status: 'COMPLETED',
       statusCode: response.statusCode,
       responseBody: response.body,
-      // createdAt is refreshed so that `lifetime = expiresAt - createdAt`
-      // reflects the new TTL window.
-      createdAt: now,
+      // `createdAt` is INTENTIONALLY preserved — it is an invariant field
+      // of IdempotencyRecord (see interface docstring). Only `expiresAt`
+      // is refreshed to the new TTL window.
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000),
     };
     this.entries.set(key, {

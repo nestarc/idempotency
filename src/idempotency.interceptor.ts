@@ -34,6 +34,9 @@ import type {
   IdempotencyScope,
   IdempotentMetadata,
 } from './interfaces/idempotency-options.interface';
+import type {
+  IdempotencyRecord,
+} from './interfaces/idempotency-record.interface';
 import type { IdempotencyStorage } from './interfaces/idempotency-storage.interface';
 
 interface ResolvedOptions {
@@ -42,6 +45,17 @@ interface ResolvedOptions {
   fingerprint: boolean;
   headerName: string;
   scope: IdempotencyScope;
+}
+
+/**
+ * The minimal shape of the response object the interceptor touches.
+ * Matches both Express's `Response` and Fastify's `FastifyReply` signatures
+ * for the two operations we actually use: reading the effective statusCode
+ * and setting it for a replay.
+ */
+interface ResponseShape {
+  statusCode?: number;
+  status: (code: number) => unknown;
 }
 
 /**
@@ -67,6 +81,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
     private readonly moduleOptions: IdempotencyOptions,
   ) {}
 
+  // ──────────────────────────────────────────────────────────────────
+  // intercept() is the entry point. Its body reads as a narrative:
+  //   1. Read decorator metadata and bail if not idempotent-enabled.
+  //   2. Extract the Idempotency-Key header (and scope it).
+  //   3. Look up the existing record and dispatch to `handleExisting` if
+  //      one was found, or `acquireAndRun` otherwise.
+  // Each branch is a private method so this body stays readable and the
+  // RxJS pipeline is not nested four levels deep.
+  // ──────────────────────────────────────────────────────────────────
   intercept(
     context: ExecutionContext,
     next: CallHandler,
@@ -87,10 +110,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       headers: Record<string, string | string[] | undefined>;
       body: unknown;
     }>();
-    const res = http.getResponse<{
-      statusCode?: number;
-      status: (code: number) => unknown;
-    }>();
+    const res = http.getResponse<ResponseShape>();
 
     const headerValue = req.headers[opts.headerName.toLowerCase()];
     const rawKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
@@ -115,113 +135,169 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return from(this.storage.get(scopedKey)).pipe(
       switchMap((existing) => {
         if (existing) {
-          // Fingerprint mismatch takes priority over PROCESSING state —
-          // IETF draft semantics (key reused with different payload → 422).
-          if (
-            existing.fingerprint &&
-            fingerprint &&
-            existing.fingerprint !== fingerprint
-          ) {
-            return throwError(
-              () =>
-                new UnprocessableEntityException(
-                  `Idempotency-Key reused with a different payload`,
-                ),
-            );
-          }
-
-          if (existing.status === 'PROCESSING') {
-            return throwError(
-              () =>
-                new ConflictException(
-                  `Request with this Idempotency-Key is already being processed`,
-                ),
-            );
-          }
-
-          if (existing.status === 'COMPLETED') {
-            if (typeof existing.statusCode === 'number') {
-              res.status(existing.statusCode);
-            }
-            const body =
-              existing.responseBody !== undefined
-                ? JSON.parse(existing.responseBody)
-                : undefined;
-            return of(body);
-          }
+          return this.handleExistingRecord(existing, fingerprint, res);
         }
+        return this.acquireAndRun(scopedKey, fingerprint, opts, res, next);
+      }),
+    );
+  }
 
-        // No existing record — try to acquire the lock.
-        return from(
-          this.storage.create(scopedKey, fingerprint, opts.ttl),
-        ).pipe(
-          switchMap((createResult) => {
-            if (!createResult.acquired || !createResult.token) {
-              return throwError(
-                () =>
-                  new ConflictException(
-                    `Request with this Idempotency-Key is already being processed`,
-                  ),
-              );
-            }
-            const token = createResult.token;
+  /**
+   * Dispatches a request that observed an EXISTING storage record.
+   *
+   * Three outcomes, in priority order:
+   * - Fingerprint mismatch → 422 (beats PROCESSING even while in-flight)
+   * - Status is PROCESSING → 409
+   * - Status is COMPLETED → replay (restore statusCode, parse body)
+   *
+   * Extracted from {@link intercept} for SRP — the rules governing
+   * "what to do with a record that already exists" change independently
+   * from the rules governing "how to acquire a new lock and run".
+   */
+  private handleExistingRecord(
+    existing: IdempotencyRecord,
+    fingerprint: string | undefined,
+    res: ResponseShape,
+  ): Observable<unknown> {
+    // Fingerprint mismatch takes priority over PROCESSING state —
+    // IETF draft semantics (key reused with different payload → 422).
+    if (
+      existing.fingerprint &&
+      fingerprint &&
+      existing.fingerprint !== fingerprint
+    ) {
+      return throwError(
+        () =>
+          new UnprocessableEntityException(
+            `Idempotency-Key reused with a different payload`,
+          ),
+      );
+    }
 
-            return next.handle().pipe(
-              concatMap((value) => {
-                // Guard #1: non-replayable response types (Buffer, streams, etc.)
-                if (!IdempotencyInterceptor.isReplayable(value)) {
-                  this.logger.warn(
-                    `Response for key="${scopedKey}" is not a plain JSON value (type=${IdempotencyInterceptor.describeType(value)}); skipping cache`,
-                  );
-                  return from(this.storage.delete(scopedKey, token)).pipe(
-                    map(() => value),
-                  );
-                }
+    if (existing.status === 'PROCESSING') {
+      return throwError(
+        () =>
+          new ConflictException(
+            `Request with this Idempotency-Key is already being processed`,
+          ),
+      );
+    }
 
-                // Guard #2: JSON serialization failure (circular refs, BigInt, etc.)
-                let serialized: string | undefined;
-                try {
-                  serialized =
-                    value === undefined ? undefined : JSON.stringify(value);
-                } catch (err) {
-                  this.logger.warn(
-                    `Response for key="${scopedKey}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
-                  );
-                  return from(this.storage.delete(scopedKey, token)).pipe(
-                    map(() => value),
-                  );
-                }
+    // Status is COMPLETED — replay the cached response.
+    if (typeof existing.statusCode === 'number') {
+      res.status(existing.statusCode);
+    }
+    const body =
+      existing.responseBody !== undefined
+        ? JSON.parse(existing.responseBody)
+        : undefined;
+    return of(body);
+  }
 
-                const statusCode = res.statusCode ?? 200;
-                return from(
-                  this.storage.complete(
-                    scopedKey,
-                    token,
-                    { statusCode, body: serialized },
-                    opts.ttl,
-                  ),
-                ).pipe(
-                  map((result) => {
-                    if (result === 'stale') {
-                      // Our record was evicted and replaced while the handler ran.
-                      // The client deserves the response we computed; we just
-                      // can't cache it. Log and emit.
-                      this.logger.warn(
-                        `Stale token when completing key="${scopedKey}" — response not cached (likely TTL eviction race)`,
-                      );
-                    }
-                    return value;
-                  }),
-                );
-              }),
-              catchError((err) =>
-                from(this.storage.delete(scopedKey, token)).pipe(
-                  switchMap(() => throwError(() => err)),
-                ),
+  /**
+   * Acquires a new PROCESSING lock, runs the downstream handler, and
+   * captures its response (or cleans up on error).
+   *
+   * Extracted from {@link intercept} for SRP — the lock-acquisition /
+   * delegate / cleanup lifecycle is a self-contained responsibility
+   * separate from the "existing record" dispatch above.
+   */
+  private acquireAndRun(
+    scopedKey: string,
+    fingerprint: string | undefined,
+    opts: ResolvedOptions,
+    res: ResponseShape,
+    next: CallHandler,
+  ): Observable<unknown> {
+    return from(this.storage.create(scopedKey, fingerprint, opts.ttl)).pipe(
+      switchMap((createResult) => {
+        if (!createResult.acquired || !createResult.token) {
+          return throwError(
+            () =>
+              new ConflictException(
+                `Request with this Idempotency-Key is already being processed`,
               ),
-            );
-          }),
+          );
+        }
+        const token = createResult.token;
+
+        return next.handle().pipe(
+          concatMap((value) =>
+            this.captureResponse(scopedKey, token, value, res, opts.ttl),
+          ),
+          catchError((err) =>
+            from(this.storage.delete(scopedKey, token)).pipe(
+              switchMap(() => throwError(() => err)),
+            ),
+          ),
         );
+      }),
+    );
+  }
+
+  /**
+   * Captures the handler's emitted value into storage, handling all the
+   * corner cases that would otherwise clutter the main pipeline:
+   *
+   * - Non-replayable types (Buffer, streams) → bypass cache + warn
+   * - JSON serialization failure (circular refs) → bypass cache + warn
+   * - Storage complete() returns 'stale' → emit anyway + warn
+   * - Otherwise → persist and emit the original value
+   *
+   * This is the "response capture" responsibility, which changes for
+   * different reasons than lock acquisition or state dispatch — so it
+   * lives in its own method.
+   */
+  private captureResponse(
+    scopedKey: string,
+    token: string,
+    value: unknown,
+    res: ResponseShape,
+    ttl: number,
+  ): Observable<unknown> {
+    // Guard #1: non-replayable response types (Buffer, streams, etc.)
+    if (!IdempotencyInterceptor.isReplayable(value)) {
+      this.logger.warn(
+        `Response for key="${scopedKey}" is not a plain JSON value (type=${IdempotencyInterceptor.describeType(value)}); skipping cache`,
+      );
+      return from(this.storage.delete(scopedKey, token)).pipe(
+        map(() => value),
+      );
+    }
+
+    // Guard #2: JSON serialization failure (circular refs, BigInt, etc.)
+    let serialized: string | undefined;
+    try {
+      serialized =
+        value === undefined ? undefined : JSON.stringify(value);
+    } catch (err) {
+      this.logger.warn(
+        `Response for key="${scopedKey}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
+      );
+      return from(this.storage.delete(scopedKey, token)).pipe(
+        map(() => value),
+      );
+    }
+
+    const statusCode = res.statusCode ?? 200;
+    return from(
+      this.storage.complete(
+        scopedKey,
+        token,
+        { statusCode, body: serialized },
+        ttl,
+      ),
+    ).pipe(
+      map((result) => {
+        if (result === 'stale') {
+          // Our record was evicted and replaced while the handler ran.
+          // The client deserves the response we computed; we just
+          // can't cache it. Log and emit.
+          this.logger.warn(
+            `Stale token when completing key="${scopedKey}" — response not cached (likely TTL eviction race)`,
+          );
+        }
+        return value;
       }),
     );
   }

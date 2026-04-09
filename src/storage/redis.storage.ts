@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Redis, RedisOptions } from 'ioredis';
 
@@ -72,7 +72,7 @@ type RedisWithIdem = Redis & {
  * GET-then-SET pattern would leave open.
  */
 @Injectable()
-export class RedisStorage implements IdempotencyStorage {
+export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
   private readonly client: RedisWithIdem;
   private readonly keyPrefix: string;
   private readonly ownsClient: boolean;
@@ -190,11 +190,29 @@ export class RedisStorage implements IdempotencyStorage {
   /**
    * Closes the internally-managed Redis client. No-op if the client was
    * supplied by the consumer (they own its lifecycle).
+   *
+   * Normally called automatically via `onModuleDestroy()` during Nest's
+   * shutdown. Exposed publicly so non-Nest consumers (or manual teardown
+   * in tests) can trigger the cleanup without going through the module
+   * lifecycle.
    */
   async close(): Promise<void> {
     if (this.ownsClient && typeof this.client.quit === 'function') {
       await this.client.quit();
     }
+  }
+
+  /**
+   * Nest lifecycle hook — fires automatically when the host module is
+   * destroyed (e.g. during `app.close()`). Delegates to {@link close}
+   * so consumers who pass only `connection` options (letting this class
+   * own the client) get graceful teardown without manual bookkeeping.
+   *
+   * If the consumer supplied their own `client`, this hook is a no-op:
+   * they remain responsible for closing what they created.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.close();
   }
 
   private prefixedKey(key: string): string {

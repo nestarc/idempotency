@@ -52,6 +52,21 @@ export type MutateResult = 'ok' | 'stale';
  *    only mutate a record whose stored token matches the token they received
  *    from their own `create()` call. This prevents the TTL-eviction race
  *    where a slow caller would otherwise clobber a newer caller's record.
+ * 3. `createdAt` immutability — `complete()` and any other mutation MUST
+ *    preserve the `createdAt` field of the original PROCESSING record.
+ *    See {@link IdempotencyRecord.createdAt}.
+ *
+ * ### Lifecycle
+ *
+ * Storage adapters that hold external resources (Redis clients, DB
+ * connections, timers) SHOULD implement Nest's `OnModuleDestroy` hook so
+ * the resources are released when the host application shuts down. Both
+ * built-in adapters (`MemoryStorage`, `RedisStorage`) do this — a custom
+ * adapter is free to opt in the same way.
+ *
+ * A cross-adapter contract suite that exercises every requirement of this
+ * interface lives at `test/support/shared-storage-contract.ts` — new
+ * adapters should be plugged into it to guarantee LSP-level uniformity.
  */
 export interface IdempotencyStorage {
   /**
