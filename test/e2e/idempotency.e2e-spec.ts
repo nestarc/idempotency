@@ -19,7 +19,7 @@ import { Idempotent } from '../../src/idempotency.decorator';
 import { MemoryStorage } from '../../src/storage/memory.storage';
 
 /** Counter that lets us verify the handler ran exactly once across replays. */
-const callCounter = { create: 0, refund: 0, fail: 0 };
+const callCounter = { create: 0, refund: 0, fail: 0, cross: 0 };
 
 @Controller('payments')
 class PaymentsController {
@@ -29,7 +29,7 @@ class PaymentsController {
   @UseInterceptors(IdempotencyInterceptor)
   create(@Body() dto: { amount: number }) {
     callCounter.create += 1;
-    return { id: `pay_${callCounter.create}`, amount: dto.amount };
+    return { id: `pay_${callCounter.create}`, kind: 'payment', amount: dto.amount };
   }
 
   @Post('refund')
@@ -53,13 +53,29 @@ class PaymentsController {
   }
 }
 
+// A second, independent controller that happens to share the payments path-ish
+// name but is a distinct class+method — used for P1 #2 cross-endpoint regression.
+@Controller('transfers')
+class TransfersController {
+  @Post()
+  @HttpCode(201)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
+  transfer(@Body() dto: { amount: number }) {
+    callCounter.cross += 1;
+    return { id: `tr_${callCounter.cross}`, kind: 'transfer', amount: dto.amount };
+  }
+}
+
 @Module({
   imports: [
     IdempotencyModule.forRoot({
       storage: new MemoryStorage(),
+      // Default scope 'endpoint' is what we want to verify — make it explicit.
+      scope: 'endpoint',
     }),
   ],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, TransfersController],
 })
 class TestAppModule {}
 
@@ -82,6 +98,7 @@ describe('Idempotency (e2e)', () => {
     callCounter.create = 0;
     callCounter.refund = 0;
     callCounter.fail = 0;
+    callCounter.cross = 0;
   });
 
   it('processes a first request normally and returns 201', async () => {
@@ -91,7 +108,7 @@ describe('Idempotency (e2e)', () => {
       .send({ amount: 100 });
 
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ id: 'pay_1', amount: 100 });
+    expect(res.body).toEqual({ id: 'pay_1', kind: 'payment', amount: 100 });
     expect(callCounter.create).toBe(1);
   });
 
@@ -172,5 +189,68 @@ describe('Idempotency (e2e)', () => {
     expect(second.status).toBe(202);
     expect(second.body).toEqual(first.body);
     expect(callCounter.refund).toBe(1);
+  });
+
+  // P1 #2 regression: two different endpoints using the SAME Idempotency-Key
+  // value must not interfere with each other under scope='endpoint'.
+  it('does not conflate endpoints: same key on /payments and /transfers runs both handlers', async () => {
+    const pay = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'cross-endpoint-key')
+      .send({ amount: 100 });
+
+    expect(pay.status).toBe(201);
+    expect(pay.body.kind).toBe('payment');
+
+    // Same key, same body, different endpoint — under the fixed contract,
+    // the transfer handler runs and returns its own response.
+    const transfer = await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', 'cross-endpoint-key')
+      .send({ amount: 100 });
+
+    expect(transfer.status).toBe(201);
+    expect(transfer.body.kind).toBe('transfer');
+
+    // Both handlers ran exactly once.
+    expect(callCounter.create).toBe(1);
+    expect(callCounter.cross).toBe(1);
+
+    // Each endpoint still replays correctly WITHIN its own scope.
+    const payAgain = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'cross-endpoint-key')
+      .send({ amount: 100 });
+    expect(payAgain.body).toEqual(pay.body);
+    expect(callCounter.create).toBe(1); // still 1
+
+    const transferAgain = await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', 'cross-endpoint-key')
+      .send({ amount: 100 });
+    expect(transferAgain.body).toEqual(transfer.body);
+    expect(callCounter.cross).toBe(1); // still 1
+  });
+
+  // P1 #2 regression, negative case: different body on the OTHER endpoint
+  // must NOT produce a false 422 from a neighboring endpoint's fingerprint.
+  it('returns 201 (not 422) when a different endpoint reuses the key with a different body', async () => {
+    await request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'cross-body-key')
+      .send({ amount: 100 });
+
+    const transfer = await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', 'cross-body-key')
+      .send({ amount: 999 }); // different body
+
+    // Under the fixed contract, the transfer gets its own scoped namespace
+    // so the fingerprint check runs against the EMPTY slot, not against
+    // the payment's fingerprint. Expect normal 201, not 422.
+    expect(transfer.status).toBe(201);
+    expect(transfer.body).toEqual(
+      expect.objectContaining({ kind: 'transfer', amount: 999 }),
+    );
   });
 });

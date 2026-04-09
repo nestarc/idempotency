@@ -20,73 +20,114 @@ describe('MemoryStorage', () => {
   });
 
   describe('create', () => {
-    it('creates a PROCESSING record and returns true', async () => {
-      const created = await storage.create('k1', 'fp', 10);
-      expect(created).toBe(true);
+    it('creates a PROCESSING record and returns a token', async () => {
+      const result = await storage.create('k1', 'fp', 10);
+      expect(result.acquired).toBe(true);
+      expect(typeof result.token).toBe('string');
+      expect(result.token).toMatch(/^[0-9a-f-]{36}$/i);
 
       const record = await storage.get('k1');
       expect(record).not.toBeNull();
       expect(record!.key).toBe('k1');
+      expect(record!.token).toBe(result.token);
       expect(record!.fingerprint).toBe('fp');
       expect(record!.status).toBe('PROCESSING');
-      expect(record!.statusCode).toBeUndefined();
-      expect(record!.responseBody).toBeUndefined();
-
       const lifetimeMs =
         record!.expiresAt.getTime() - record!.createdAt.getTime();
       expect(lifetimeMs).toBe(10_000);
     });
 
-    it('returns false on the second call for the same key (NX semantics)', async () => {
+    it('returns acquired=false on the second call for the same key (NX semantics)', async () => {
       const first = await storage.create('k1', 'fpA', 10);
       const second = await storage.create('k1', 'fpB', 10);
 
-      expect(first).toBe(true);
-      expect(second).toBe(false);
+      expect(first.acquired).toBe(true);
+      expect(second.acquired).toBe(false);
+      expect(second.token).toBeUndefined();
 
-      // Original record must NOT be clobbered.
+      // Original record intact.
       const record = await storage.get('k1');
       expect(record!.fingerprint).toBe('fpA');
     });
   });
 
   describe('complete', () => {
-    it('transitions PROCESSING to COMPLETED and stores the response', async () => {
-      await storage.create('k1', 'fp', 10);
-      await storage.complete(
+    it('transitions PROCESSING to COMPLETED and refreshes TTL', async () => {
+      const { token } = await storage.create('k1', 'fp', 10);
+      const result = await storage.complete(
         'k1',
+        token!,
         { statusCode: 201, body: '{"id":"abc"}' },
         60,
       );
+      expect(result).toBe('ok');
 
       const record = await storage.get('k1');
-      expect(record).not.toBeNull();
       expect(record!.status).toBe('COMPLETED');
       expect(record!.statusCode).toBe(201);
       expect(record!.responseBody).toBe('{"id":"abc"}');
-
-      // TTL should be refreshed to the new value (60 seconds).
       const lifetimeMs =
         record!.expiresAt.getTime() - record!.createdAt.getTime();
       expect(lifetimeMs).toBe(60_000);
     });
 
-    it('throws when called for a key that does not exist', async () => {
-      await expect(
-        storage.complete('missing', { statusCode: 200 }, 10),
-      ).rejects.toThrow(/not found|missing|exist/i);
+    it('returns "stale" when the key does not exist', async () => {
+      const result = await storage.complete(
+        'missing',
+        'some-token',
+        { statusCode: 200 },
+        10,
+      );
+      expect(result).toBe('stale');
+    });
+
+    it('returns "stale" when the token does not match (post-TTL replacement race)', async () => {
+      // Request A creates a record with a SHORT ttl.
+      const a = await storage.create('k1', 'fpA', 1);
+      // Time passes, record is evicted.
+      jest.advanceTimersByTime(1_100);
+      // Request B creates a fresh record for the same key.
+      const b = await storage.create('k1', 'fpB', 60);
+      expect(b.acquired).toBe(true);
+      expect(b.token).not.toBe(a.token);
+      // Request A (which had the short ttl) now tries to complete.
+      // Its token no longer matches the stored record — storage MUST refuse.
+      const result = await storage.complete(
+        'k1',
+        a.token!,
+        { statusCode: 200, body: '{"owner":"A"}' },
+        60,
+      );
+      expect(result).toBe('stale');
+
+      // Verify B's record was NOT clobbered.
+      const record = await storage.get('k1');
+      expect(record!.token).toBe(b.token);
+      expect(record!.fingerprint).toBe('fpB');
+      expect(record!.responseBody).toBeUndefined();
+      expect(record!.status).toBe('PROCESSING');
     });
   });
 
   describe('delete', () => {
-    it('removes a record so subsequent get returns null', async () => {
-      await storage.create('k1', undefined, 10);
-      await storage.delete('k1');
+    it('removes a record when the token matches', async () => {
+      const { token } = await storage.create('k1', undefined, 10);
+      const result = await storage.delete('k1', token!);
+      expect(result).toBe('ok');
       await expect(storage.get('k1')).resolves.toBeNull();
     });
 
-    it('is a no-op for a missing key', async () => {
-      await expect(storage.delete('missing')).resolves.toBeUndefined();
+    it('returns "ok" for a missing key (idempotent cleanup)', async () => {
+      const result = await storage.delete('missing', 'any-token');
+      expect(result).toBe('ok');
+    });
+
+    it('returns "stale" when the token does not match', async () => {
+      await storage.create('k1', 'fp', 10);
+      const result = await storage.delete('k1', 'wrong-token');
+      expect(result).toBe('stale');
+      // Record NOT deleted.
+      await expect(storage.get('k1')).resolves.not.toBeNull();
     });
   });
 
@@ -98,13 +139,9 @@ describe('MemoryStorage', () => {
     });
 
     it('refreshes the TTL on complete()', async () => {
-      await storage.create('k1', 'fp', 5);
+      const { token } = await storage.create('k1', 'fp', 5);
       jest.advanceTimersByTime(3_000);
-
-      // Halfway through the original TTL: complete with a much longer TTL.
-      await storage.complete('k1', { statusCode: 200, body: '{}' }, 60);
-
-      // Advance well past the original 5s window — the record must still be there.
+      await storage.complete('k1', token!, { statusCode: 200, body: '{}' }, 60);
       jest.advanceTimersByTime(10_000);
       const record = await storage.get('k1');
       expect(record).not.toBeNull();
@@ -117,11 +154,8 @@ describe('MemoryStorage', () => {
       await storage.create('a', undefined, 100);
       await storage.create('b', undefined, 100);
       await storage.create('c', undefined, 100);
-
       expect(jest.getTimerCount()).toBeGreaterThanOrEqual(3);
-
       await storage.onModuleDestroy();
-
       expect(jest.getTimerCount()).toBe(0);
     });
   });

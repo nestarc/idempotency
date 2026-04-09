@@ -31,6 +31,7 @@ import {
 } from './idempotency.constants';
 import type {
   IdempotencyOptions,
+  IdempotencyScope,
   IdempotentMetadata,
 } from './interfaces/idempotency-options.interface';
 import type { IdempotencyStorage } from './interfaces/idempotency-storage.interface';
@@ -40,15 +41,17 @@ interface ResolvedOptions {
   ttl: number;
   fingerprint: boolean;
   headerName: string;
+  scope: IdempotencyScope;
 }
 
 /**
  * The core idempotency interceptor.
  *
  * Reads `@Idempotent()` metadata off the handler, extracts the configured
- * idempotency header, computes a request body fingerprint, and dispatches the
- * storage state machine: replay COMPLETED, conflict on PROCESSING, mismatch
- * on differing fingerprint, otherwise lock + delegate + capture response.
+ * idempotency header, computes a request body fingerprint, and dispatches
+ * the storage state machine: replay COMPLETED, conflict on PROCESSING,
+ * mismatch on differing fingerprint, otherwise lock + delegate + capture
+ * response under token-based compare-and-set.
  *
  * Implements the IETF draft `httpapi-idempotency-key-header-07` semantics for
  * 400 / 409 / 422 responses.
@@ -84,12 +87,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
       headers: Record<string, string | string[] | undefined>;
       body: unknown;
     }>();
-    const res = http.getResponse<{ statusCode?: number; status: (code: number) => unknown }>();
+    const res = http.getResponse<{
+      statusCode?: number;
+      status: (code: number) => unknown;
+    }>();
 
     const headerValue = req.headers[opts.headerName.toLowerCase()];
-    const key = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    const rawKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
-    if (!key) {
+    if (!rawKey) {
       if (opts.required) {
         return throwError(
           () =>
@@ -101,14 +107,16 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
+    const scopedKey = this.applyScope(opts.scope, context, rawKey);
     const fingerprint = opts.fingerprint
       ? this.computeFingerprint(req.body)
       : undefined;
 
-    return from(this.storage.get(key)).pipe(
+    return from(this.storage.get(scopedKey)).pipe(
       switchMap((existing) => {
         if (existing) {
-          // Fingerprint mismatch wins over PROCESSING — IETF draft semantics.
+          // Fingerprint mismatch takes priority over PROCESSING state —
+          // IETF draft semantics (key reused with different payload → 422).
           if (
             existing.fingerprint &&
             fingerprint &&
@@ -144,9 +152,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
         }
 
         // No existing record — try to acquire the lock.
-        return from(this.storage.create(key, fingerprint, opts.ttl)).pipe(
-          switchMap((created) => {
-            if (!created) {
+        return from(
+          this.storage.create(scopedKey, fingerprint, opts.ttl),
+        ).pipe(
+          switchMap((createResult) => {
+            if (!createResult.acquired || !createResult.token) {
               return throwError(
                 () =>
                   new ConflictException(
@@ -154,29 +164,58 @@ export class IdempotencyInterceptor implements NestInterceptor {
                   ),
               );
             }
+            const token = createResult.token;
+
             return next.handle().pipe(
               concatMap((value) => {
+                // Guard #1: non-replayable response types (Buffer, streams, etc.)
+                if (!IdempotencyInterceptor.isReplayable(value)) {
+                  this.logger.warn(
+                    `Response for key="${scopedKey}" is not a plain JSON value (type=${IdempotencyInterceptor.describeType(value)}); skipping cache`,
+                  );
+                  return from(this.storage.delete(scopedKey, token)).pipe(
+                    map(() => value),
+                  );
+                }
+
+                // Guard #2: JSON serialization failure (circular refs, BigInt, etc.)
                 let serialized: string | undefined;
                 try {
                   serialized =
                     value === undefined ? undefined : JSON.stringify(value);
                 } catch (err) {
                   this.logger.warn(
-                    `Response for key="${key}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
+                    `Response for key="${scopedKey}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
                   );
-                  return from(this.storage.delete(key)).pipe(map(() => value));
+                  return from(this.storage.delete(scopedKey, token)).pipe(
+                    map(() => value),
+                  );
                 }
+
                 const statusCode = res.statusCode ?? 200;
                 return from(
                   this.storage.complete(
-                    key,
+                    scopedKey,
+                    token,
                     { statusCode, body: serialized },
                     opts.ttl,
                   ),
-                ).pipe(map(() => value));
+                ).pipe(
+                  map((result) => {
+                    if (result === 'stale') {
+                      // Our record was evicted and replaced while the handler ran.
+                      // The client deserves the response we computed; we just
+                      // can't cache it. Log and emit.
+                      this.logger.warn(
+                        `Stale token when completing key="${scopedKey}" — response not cached (likely TTL eviction race)`,
+                      );
+                    }
+                    return value;
+                  }),
+                );
               }),
               catchError((err) =>
-                from(this.storage.delete(key)).pipe(
+                from(this.storage.delete(scopedKey, token)).pipe(
                   switchMap(() => throwError(() => err)),
                 ),
               ),
@@ -194,12 +233,79 @@ export class IdempotencyInterceptor implements NestInterceptor {
       fingerprint:
         metadata.fingerprint ?? this.moduleOptions.fingerprint ?? true,
       headerName: this.moduleOptions.headerName ?? DEFAULT_HEADER_NAME,
+      scope: this.moduleOptions.scope ?? 'endpoint',
     };
+  }
+
+  /**
+   * Derives the namespaced storage key from the raw header value according
+   * to the configured {@link IdempotencyScope}.
+   */
+  private applyScope(
+    scope: IdempotencyScope,
+    context: ExecutionContext,
+    rawKey: string,
+  ): string {
+    if (scope === 'global') {
+      return rawKey;
+    }
+    if (typeof scope === 'function') {
+      return `${scope(context)}::${rawKey}`;
+    }
+    // 'endpoint' — Controller class name + handler method name.
+    // `::` cannot appear in JS identifiers so there is no collision risk.
+    const className = context.getClass()?.name ?? 'UnknownController';
+    const methodName = context.getHandler()?.name ?? 'unknownHandler';
+    return `${className}#${methodName}::${rawKey}`;
   }
 
   private computeFingerprint(body: unknown): string {
     return createHash('sha256')
       .update(JSON.stringify(body ?? null))
       .digest('hex');
+  }
+
+  /**
+   * True if the value is a plain JSON-replayable shape: null, undefined,
+   * primitives, plain objects, and arrays. False for Buffers, typed arrays,
+   * ArrayBuffers, Node streams, and Web ReadableStreams — those will not
+   * round-trip correctly through JSON.parse(JSON.stringify(...)).
+   */
+  private static isReplayable(value: unknown): boolean {
+    if (value === null || value === undefined) {
+      return true;
+    }
+    if (typeof value !== 'object') {
+      return true;
+    }
+    if (Buffer.isBuffer(value)) {
+      return false;
+    }
+    if (ArrayBuffer.isView(value)) {
+      return false;
+    }
+    if (value instanceof ArrayBuffer) {
+      return false;
+    }
+    const maybeStream = value as { pipe?: unknown; getReader?: unknown };
+    if (typeof maybeStream.pipe === 'function') {
+      return false;
+    }
+    if (typeof maybeStream.getReader === 'function') {
+      return false;
+    }
+    return true;
+  }
+
+  private static describeType(value: unknown): string {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (Buffer.isBuffer(value)) return 'Buffer';
+    if (ArrayBuffer.isView(value)) return value.constructor.name;
+    if (value instanceof ArrayBuffer) return 'ArrayBuffer';
+    const maybeStream = value as { pipe?: unknown; getReader?: unknown };
+    if (typeof maybeStream.pipe === 'function') return 'Stream';
+    if (typeof maybeStream.getReader === 'function') return 'ReadableStream';
+    return typeof value;
   }
 }

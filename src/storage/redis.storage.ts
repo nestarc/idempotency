@@ -1,9 +1,12 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import type { Redis, RedisOptions } from 'ioredis';
 
 import type {
   CompleteResponse,
+  CreateResult,
   IdempotencyStorage,
+  MutateResult,
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
 
@@ -13,17 +16,13 @@ import type { IdempotencyRecord } from '../interfaces/idempotency-record.interfa
  * Provide either a pre-built `client` (recommended — lets the consumer manage
  * connection lifecycle) OR a `connection` options object that the storage
  * uses to lazily build its own client.
- *
- * `clientFactory` is an injection seam for tests: when supplied, the storage
- * uses it instead of `new Redis(connection)`. This allows tests to substitute
- * `ioredis-mock` without monkey-patching module imports.
  */
 export interface RedisStorageOptions {
   /** A pre-built ioredis client. Wins over `connection` if both are supplied. */
   client?: Redis;
   /** ioredis connection options used to lazily construct an internal client. */
   connection?: RedisOptions;
-  /** Optional custom factory used in place of `new Redis(connection)`. */
+  /** Test-only seam: custom factory used in place of `new Redis(connection)`. */
   clientFactory?: (connection: RedisOptions) => Redis;
   /**
    * Prefix prepended to every idempotency key in Redis.
@@ -32,9 +31,8 @@ export interface RedisStorageOptions {
   keyPrefix?: string;
 }
 
-/** The shape persisted as a JSON string under each Redis key. */
-interface SerializedRecord {
-  key: string;
+/** Persisted as a Redis Hash under each prefixed key. */
+interface SerializedPayload {
   fingerprint?: string;
   status: 'PROCESSING' | 'COMPLETED';
   statusCode?: number;
@@ -45,110 +43,148 @@ interface SerializedRecord {
 
 const DEFAULT_KEY_PREFIX = 'idempotency:';
 
+// ioredis's custom command typing is looser than the declared Redis class.
+// We widen the client type locally so the injected Lua commands are callable.
+type RedisWithIdem = Redis & {
+  idemCreate(
+    key: string,
+    token: string,
+    payload: string,
+    ttl: string,
+  ): Promise<number>;
+  idemComplete(
+    key: string,
+    token: string,
+    payload: string,
+    ttl: string,
+  ): Promise<string>;
+  idemDelete(key: string, token: string): Promise<string>;
+};
+
 /**
  * Redis-backed implementation of {@link IdempotencyStorage}.
  *
- * Stores each record as a single JSON-serialized string under
- * `${keyPrefix}${key}` and uses `SET ... EX <ttl> NX` for atomic creation
- * (the lock-and-create primitive recommended by the IETF draft and the
- * `@nestarc/idempotency` design notes).
- *
- * Production-safe: shares state across replicas via Redis, and Redis itself
- * handles TTL eviction so no application-level timer bookkeeping is needed.
+ * Stores each record as a Redis Hash under `${keyPrefix}${key}` with two
+ * fields: `token` (opaque UUID owned by the creating caller) and `payload`
+ * (JSON-serialized {@link SerializedPayload}). All mutations go through
+ * Lua scripts registered with `defineCommand` so the compare-and-set logic
+ * runs atomically on the Redis server — closing the race window that a
+ * GET-then-SET pattern would leave open.
  */
 @Injectable()
 export class RedisStorage implements IdempotencyStorage {
-  private readonly client: Redis;
+  private readonly client: RedisWithIdem;
   private readonly keyPrefix: string;
   private readonly ownsClient: boolean;
 
   constructor(options: RedisStorageOptions) {
     this.keyPrefix = options.keyPrefix ?? DEFAULT_KEY_PREFIX;
 
+    let baseClient: Redis;
     if (options.client) {
-      this.client = options.client;
+      baseClient = options.client;
       this.ownsClient = false;
     } else if (options.connection) {
       const factory =
         options.clientFactory ??
         ((connection: RedisOptions): Redis => {
           // Lazy require so consumers without ioredis installed are unaffected
-          // unless they actually try to use this code path.
+          // unless they actually exercise this code path.
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const RedisCtor = require('ioredis') as new (
             opts: RedisOptions,
           ) => Redis;
           return new RedisCtor(connection);
         });
-      this.client = factory(options.connection);
+      baseClient = factory(options.connection);
       this.ownsClient = true;
     } else {
       throw new Error(
         'RedisStorage: must supply either `client` or `connection` options',
       );
     }
+
+    RedisStorage.registerCommands(baseClient);
+    this.client = baseClient as RedisWithIdem;
   }
 
   async get(key: string): Promise<IdempotencyRecord | null> {
-    const raw = await this.client.get(this.prefixedKey(key));
-    if (raw === null) {
+    const hash = await this.client.hgetall(this.prefixedKey(key));
+    if (!hash || !hash.token || !hash.payload) {
       return null;
     }
-    return this.deserialize(raw);
+    const payload = JSON.parse(hash.payload) as SerializedPayload;
+    return {
+      key,
+      token: hash.token,
+      fingerprint: payload.fingerprint,
+      status: payload.status,
+      statusCode: payload.statusCode,
+      responseBody: payload.responseBody,
+      createdAt: new Date(payload.createdAt),
+      expiresAt: new Date(payload.expiresAt),
+    };
   }
 
   async create(
     key: string,
     fingerprint: string | undefined,
     ttlSeconds: number,
-  ): Promise<boolean> {
+  ): Promise<CreateResult> {
+    const token = randomUUID();
     const now = new Date();
-    const record: SerializedRecord = {
-      key,
+    const payload: SerializedPayload = {
       fingerprint,
       status: 'PROCESSING',
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
     };
-    // Atomic NX + EX in one round trip — handles the race between two
-    // concurrent first-time requests by guaranteeing only one wins.
-    const result = await this.client.set(
+    const result = await this.client.idemCreate(
       this.prefixedKey(key),
-      JSON.stringify(record),
-      'EX',
-      ttlSeconds,
-      'NX',
+      token,
+      JSON.stringify(payload),
+      String(ttlSeconds),
     );
-    return result === 'OK';
+    if (result === 1) {
+      return { acquired: true, token };
+    }
+    return { acquired: false };
   }
 
   async complete(
     key: string,
+    token: string,
     response: CompleteResponse,
     ttlSeconds: number,
-  ): Promise<void> {
-    const prefixed = this.prefixedKey(key);
-    const raw = await this.client.get(prefixed);
-    if (raw === null) {
-      throw new Error(
-        `RedisStorage.complete: record for key "${key}" does not exist`,
-      );
+  ): Promise<MutateResult> {
+    // Need the existing createdAt to preserve it. HGET is a separate round
+    // trip but the Lua CAS still guarantees we only overwrite our own record.
+    const hash = await this.client.hgetall(this.prefixedKey(key));
+    if (!hash || !hash.token || hash.token !== token || !hash.payload) {
+      return 'stale';
     }
-    const existing = JSON.parse(raw) as SerializedRecord;
+    const existing = JSON.parse(hash.payload) as SerializedPayload;
     const now = new Date();
-    const updated: SerializedRecord = {
+    const updated: SerializedPayload = {
       ...existing,
       status: 'COMPLETED',
       statusCode: response.statusCode,
       responseBody: response.body,
-      // createdAt is intentionally preserved.
+      // createdAt intentionally preserved across complete().
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
     };
-    await this.client.set(prefixed, JSON.stringify(updated), 'EX', ttlSeconds);
+    const result = await this.client.idemComplete(
+      this.prefixedKey(key),
+      token,
+      JSON.stringify(updated),
+      String(ttlSeconds),
+    );
+    return result === 'ok' ? 'ok' : 'stale';
   }
 
-  async delete(key: string): Promise<void> {
-    await this.client.del(this.prefixedKey(key));
+  async delete(key: string, token: string): Promise<MutateResult> {
+    const result = await this.client.idemDelete(this.prefixedKey(key), token);
+    return result === 'ok' ? 'ok' : 'stale';
   }
 
   /**
@@ -165,16 +201,41 @@ export class RedisStorage implements IdempotencyStorage {
     return `${this.keyPrefix}${key}`;
   }
 
-  private deserialize(raw: string): IdempotencyRecord {
-    const parsed = JSON.parse(raw) as SerializedRecord;
-    return {
-      key: parsed.key,
-      fingerprint: parsed.fingerprint,
-      status: parsed.status,
-      statusCode: parsed.statusCode,
-      responseBody: parsed.responseBody,
-      createdAt: new Date(parsed.createdAt),
-      expiresAt: new Date(parsed.expiresAt),
-    };
+  /**
+   * Registers the three Lua commands that enforce compare-and-set semantics
+   * on the Redis server. Called once per client during construction; ioredis
+   * tolerates re-registration so repeated calls are safe.
+   */
+  private static registerCommands(client: Redis): void {
+    client.defineCommand('idemCreate', {
+      numberOfKeys: 1,
+      lua: `
+        if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+        redis.call('HSET', KEYS[1], 'token', ARGV[1], 'payload', ARGV[2])
+        redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+        return 1
+      `,
+    });
+    client.defineCommand('idemComplete', {
+      numberOfKeys: 1,
+      lua: `
+        local token = redis.call('HGET', KEYS[1], 'token')
+        if not token then return 'stale' end
+        if token ~= ARGV[1] then return 'stale' end
+        redis.call('HSET', KEYS[1], 'payload', ARGV[2])
+        redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+        return 'ok'
+      `,
+    });
+    client.defineCommand('idemDelete', {
+      numberOfKeys: 1,
+      lua: `
+        local token = redis.call('HGET', KEYS[1], 'token')
+        if not token then return 'ok' end
+        if token ~= ARGV[1] then return 'stale' end
+        redis.call('DEL', KEYS[1])
+        return 'ok'
+      `,
+    });
   }
 }

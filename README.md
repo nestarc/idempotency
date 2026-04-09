@@ -151,13 +151,35 @@ export class AppModule {}
 
 ### Module options (`IdempotencyModule.forRoot(...)`)
 
-| Option        | Type                | Default            | Description                                                  |
-| ------------- | ------------------- | ------------------ | ------------------------------------------------------------ |
-| `storage`     | `IdempotencyStorage` | (required)        | A storage adapter instance (e.g. `new MemoryStorage()`).      |
-| `ttl`         | `number` (seconds)  | `86400`            | Default time-to-live for records. Per-handler can override.  |
-| `headerName`  | `string`            | `'Idempotency-Key'`| HTTP header carrying the key. Defaults to the IETF standard. |
-| `fingerprint` | `boolean`           | `true`             | Compute a SHA-256 fingerprint of the request body.           |
-| `isGlobal`    | `boolean`           | `true`             | Register as a NestJS global module.                          |
+| Option        | Type                         | Default            | Description                                                  |
+| ------------- | ---------------------------- | ------------------ | ------------------------------------------------------------ |
+| `storage`     | `IdempotencyStorage`         | (required)         | A storage adapter instance (e.g. `new MemoryStorage()`).     |
+| `ttl`         | `number` (seconds)           | `86400`            | Default time-to-live for records. Per-handler can override.  |
+| `headerName`  | `string`                     | `'Idempotency-Key'`| HTTP header carrying the key. Defaults to the IETF standard. |
+| `fingerprint` | `boolean`                    | `true`             | Compute a SHA-256 fingerprint of the request body.           |
+| `scope`       | `IdempotencyScope`           | `'endpoint'`       | How storage keys are namespaced. See [Scope](#scope) below.  |
+| `isGlobal`    | `boolean`                    | `true`             | Register as a NestJS global module.                          |
+
+#### Scope
+
+The `scope` option controls how the storage key is derived from the raw header value. It matters when two different endpoints might receive the same `Idempotency-Key` value from a client.
+
+| Value        | Behavior                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `'endpoint'` | **Default.** Prepends `ControllerName#methodName::` to the key. Two different endpoints using the same header value are fully isolated. Matches the IETF draft recommendation that idempotency is scoped per (key, request URI). |
+| `'global'`   | Legacy behavior: use the raw header value as-is. Safe only if clients guarantee globally-unique keys across all endpoints. |
+| function     | `(ctx: ExecutionContext) => string`. Fully custom scoping — useful in multi-tenant systems where the scope should include the tenant id. The returned string is joined to the raw key with `::`. |
+
+```ts
+// Multi-tenant example: include the tenant ID in the scope.
+IdempotencyModule.forRoot({
+  storage: new MemoryStorage(),
+  scope: (ctx) => {
+    const req = ctx.switchToHttp().getRequest();
+    return `${req.user.tenantId}`;
+  },
+});
+```
 
 ### Decorator options (`@Idempotent(options?)`)
 
@@ -251,9 +273,10 @@ Deferred to future versions:
 ## Caveats (v0.1)
 
 - **Body fingerprint uses insertion-order `JSON.stringify`** — clients should send stable JSON. Two requests with the same fields in different orders will hash differently and be treated as a fingerprint mismatch.
-- **Only JSON-serializable responses are cached.** Streams, Buffers, and circular objects fall through with a warning and are not replayed.
+- **Only plain-JSON responses are cached.** Buffers, typed arrays, Node streams, and Web `ReadableStream` are actively detected and bypass caching with a logged warning — the handler still runs and the caller still gets the response, but there is no replay for binary endpoints.
 - **Response headers are not replayed in v0.1.** The cached response carries the original status code and body only.
 - **Express adapter only.** Fastify is not yet verified.
+- **TTL-expiry race is closed via token-based CAS.** A slow request whose PROCESSING record has been evicted by TTL cannot clobber a newer request's record under the same key — the storage refuses the write and the interceptor logs a `stale token` warning while still emitting the handler's response to the caller.
 
 ## Roadmap
 

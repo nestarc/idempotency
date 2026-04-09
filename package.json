@@ -1,6 +1,6 @@
 {
   "name": "@nestarc/idempotency",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "IETF-draft-compliant idempotency module for NestJS — decorator-based, pluggable storage (memory/Redis), response replay, fingerprint validation.",
   "license": "MIT",
   "author": "nestarc",

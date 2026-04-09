@@ -1,5 +1,26 @@
-import type { ModuleMetadata, Type } from '@nestjs/common';
+import type { ExecutionContext, ModuleMetadata, Type } from '@nestjs/common';
 import type { IdempotencyStorage } from './idempotency-storage.interface';
+
+/**
+ * How the interceptor derives the storage-key namespace from the request.
+ *
+ * - `'endpoint'` (default) — scope by controller class + handler method name.
+ *   Two different endpoints using the SAME `Idempotency-Key` value will NOT
+ *   collide. Matches the IETF draft recommendation that the key be unique
+ *   per (key, request URI) tuple.
+ *
+ * - `'global'` — legacy behavior: use the raw header value as the storage
+ *   key with no namespace. Safe only if clients guarantee globally-unique
+ *   keys across all endpoints (e.g. fresh UUIDs per request).
+ *
+ * - A function `(ctx) => string` — fully custom scoping. Useful in
+ *   multi-tenant systems where the scope should include the tenant ID.
+ *   The returned string will be combined with the raw header value.
+ */
+export type IdempotencyScope =
+  | 'endpoint'
+  | 'global'
+  | ((context: ExecutionContext) => string);
 
 /**
  * Module-level configuration passed to {@link IdempotencyModule.forRoot}.
@@ -35,6 +56,13 @@ export interface IdempotencyOptions {
    * @default true
    */
   fingerprint?: boolean;
+
+  /**
+   * How storage keys are namespaced. See {@link IdempotencyScope}.
+   *
+   * @default 'endpoint'
+   */
+  scope?: IdempotencyScope;
 
   /**
    * When true, the module is registered as a global module (no need to import

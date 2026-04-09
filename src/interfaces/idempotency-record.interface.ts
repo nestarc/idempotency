@@ -19,6 +19,14 @@ export interface IdempotencyRecord {
   key: string;
 
   /**
+   * Opaque token issued by `IdempotencyStorage.create()` that uniquely
+   * identifies THIS record across its lifetime. Used by `complete()` /
+   * `delete()` to compare-and-set so that a slow caller cannot clobber a
+   * newer caller's record after TTL eviction.
+   */
+  token: string;
+
+  /**
    * SHA-256 of the request body, used to detect a key being reused with a
    * different payload (which produces HTTP 422 per the IETF draft).
    * Undefined when fingerprinting is disabled.

@@ -1,7 +1,10 @@
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import type {
   CompleteResponse,
+  CreateResult,
   IdempotencyStorage,
+  MutateResult,
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
 
@@ -13,10 +16,10 @@ interface Entry {
 /**
  * In-memory implementation of {@link IdempotencyStorage}.
  *
- * Backed by a `Map` and `setTimeout` for expirations. Suitable for tests and
- * single-instance development. **Not safe for production**: state is lost on
- * restart and not shared across processes — so two replicas would each enforce
- * idempotency independently and a duplicate could slip through.
+ * Backed by a `Map` with per-entry `setTimeout` expirations. Suitable for
+ * tests and single-instance development. **Not safe for production**: state
+ * is lost on restart and not shared across processes — two replicas would
+ * each enforce idempotency independently, letting duplicates slip through.
  */
 @Injectable()
 export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
@@ -27,8 +30,7 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
     if (!entry) {
       return null;
     }
-    // Safety net: if a timer somehow hasn't fired yet for an expired record,
-    // evict on read.
+    // Safety net: if a timer hasn't fired yet for an expired record, evict on read.
     if (entry.record.expiresAt.getTime() <= Date.now()) {
       this.evict(key);
       return null;
@@ -40,13 +42,15 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
     key: string,
     fingerprint: string | undefined,
     ttlSeconds: number,
-  ): Promise<boolean> {
+  ): Promise<CreateResult> {
     if (this.entries.has(key)) {
-      return false;
+      return { acquired: false };
     }
     const now = new Date();
+    const token = randomUUID();
     const record: IdempotencyRecord = {
       key,
+      token,
       fingerprint,
       status: 'PROCESSING',
       createdAt: now,
@@ -56,42 +60,58 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
       record,
       timer: this.scheduleEviction(key, ttlSeconds),
     });
-    return true;
+    return { acquired: true, token };
   }
 
   async complete(
     key: string,
+    token: string,
     response: CompleteResponse,
     ttlSeconds: number,
-  ): Promise<void> {
+  ): Promise<MutateResult> {
     const entry = this.entries.get(key);
+    // Missing record: the original was evicted (or never existed). This is
+    // the TTL-race case — the caller's token points at a record that no
+    // longer exists. Signal stale so the caller knows not to retry.
     if (!entry) {
-      throw new Error(
-        `MemoryStorage.complete: record for key "${key}" does not exist`,
-      );
+      return 'stale';
     }
-    clearTimeout(entry.timer);
+    // Token mismatch: a newer caller has replaced our record. Silently refuse
+    // to clobber their state.
+    if (entry.record.token !== token) {
+      return 'stale';
+    }
 
+    clearTimeout(entry.timer);
     const now = new Date();
     const updated: IdempotencyRecord = {
       ...entry.record,
       status: 'COMPLETED',
       statusCode: response.statusCode,
       responseBody: response.body,
-      // createdAt is preserved from the original PROCESSING record.
+      // createdAt is refreshed so that `lifetime = expiresAt - createdAt`
+      // reflects the new TTL window.
+      createdAt: now,
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000),
     };
-    // Refresh createdAt to "now" so that callers querying lifetime
-    // (expiresAt - createdAt) see the new TTL window.
-    updated.createdAt = now;
     this.entries.set(key, {
       record: updated,
       timer: this.scheduleEviction(key, ttlSeconds),
     });
+    return 'ok';
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, token: string): Promise<MutateResult> {
+    const entry = this.entries.get(key);
+    if (!entry) {
+      // Idempotent cleanup: nothing to delete is success.
+      return 'ok';
+    }
+    if (entry.record.token !== token) {
+      return 'stale';
+    }
     this.evict(key);
+    return 'ok';
   }
 
   /**
@@ -118,7 +138,6 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
     const timer = setTimeout(() => {
       this.entries.delete(key);
     }, ttlSeconds * 1000);
-    // Allow the Node process to exit even if records are still pending.
     if (typeof timer.unref === 'function') {
       timer.unref();
     }

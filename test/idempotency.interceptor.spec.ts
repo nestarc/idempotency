@@ -38,6 +38,9 @@ const buildInterceptor = (overrides: Partial<IdempotencyOptions> = {}) => {
     ttl: 86_400,
     headerName: 'Idempotency-Key',
     fingerprint: true,
+    // Most tests assert against the raw key (e.g. 'K1'). Use 'global' scope
+    // to keep those assertions simple. Dedicated scope tests override this.
+    scope: 'global',
     ...overrides,
   };
   const reflector = new Reflector();
@@ -167,6 +170,7 @@ describe('IdempotencyInterceptor', () => {
       );
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
+        expect.any(String), // token
         { statusCode: 201, body: '{"ok":true}' },
         86_400,
       );
@@ -259,8 +263,9 @@ describe('IdempotencyInterceptor', () => {
     // Case 7
     it('throws Conflict when create() loses the race', async () => {
       const { interceptor, storage } = buildInterceptor();
-      // get() returns null, but create() reports false (another caller won).
-      storage.create.mockResolvedValueOnce(false);
+      // get() returns null, but create() reports acquired=false
+      // (another caller won the race).
+      storage.create.mockResolvedValueOnce({ acquired: false });
       const handler = decoratedHandler({ enabled: true });
       const { context } = buildExecutionContext({
         req: {
@@ -396,7 +401,7 @@ describe('IdempotencyInterceptor', () => {
         firstValueFrom(interceptor.intercept(context, next)),
       ).rejects.toBe(boom);
 
-      expect(storage.delete).toHaveBeenCalledWith('K1');
+      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
       expect(storage.complete).not.toHaveBeenCalled();
     });
 
@@ -419,7 +424,7 @@ describe('IdempotencyInterceptor', () => {
         firstValueFrom(interceptor.intercept(context, next)),
       ).rejects.toBe(httpErr);
 
-      expect(storage.delete).toHaveBeenCalledWith('K1');
+      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
     });
   });
 
@@ -528,6 +533,7 @@ describe('IdempotencyInterceptor', () => {
       );
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
+        expect.any(String), // token
         expect.any(Object),
         3600,
       );
@@ -555,6 +561,7 @@ describe('IdempotencyInterceptor', () => {
       expect(result).toEqual({ fromPromise: true });
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
+        expect.any(String),
         { statusCode: 200, body: '{"fromPromise":true}' },
         86_400,
       );
@@ -581,6 +588,7 @@ describe('IdempotencyInterceptor', () => {
       expect(result).toBeUndefined();
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
+        expect.any(String),
         { statusCode: 204, body: undefined },
         86_400,
       );
@@ -610,7 +618,7 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toBe(circular);
       expect(storage.complete).not.toHaveBeenCalled();
-      expect(storage.delete).toHaveBeenCalledWith('K1');
+      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
       expect(warnSpy).toHaveBeenCalled();
 
       warnSpy.mockRestore();
@@ -639,6 +647,297 @@ describe('IdempotencyInterceptor', () => {
         86_400,
       );
       expect(storage.complete).toHaveBeenCalled();
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Group I: token-based CAS (regression for TTL expiry race, P1 #1)
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('I. token CAS (P1 #1 regression)', () => {
+    // Stale complete: the slow caller's record was evicted and replaced.
+    // The interceptor must emit the handler's response to the client but
+    // MUST log a warn and NOT clobber the newer record.
+    it('emits the handler value and warns when complete() returns stale', async () => {
+      const { interceptor, storage } = buildInterceptor();
+      // Force complete() to report stale regardless of inputs.
+      storage.complete.mockResolvedValueOnce('stale');
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K1' },
+          body: {},
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ result: 'ok' }));
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      // The caller still gets the handler's response.
+      expect(result).toEqual({ result: 'ok' });
+      // A warning was emitted.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/stale token/i),
+      );
+      warnSpy.mockRestore();
+    });
+
+    // Stale delete (on handler error): silently tolerated.
+    it('tolerates a stale delete() during error cleanup', async () => {
+      const { interceptor, storage } = buildInterceptor();
+      storage.delete.mockResolvedValueOnce('stale');
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K1' },
+          body: {},
+        },
+        handler,
+      });
+      const boom = new Error('handler exploded');
+      const next = buildCallHandler(throwError(() => boom));
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBe(boom);
+
+      // delete was called and returned stale, but the error still propagates
+      // without any additional exception being thrown.
+      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Group J: scope variants (regression for cross-endpoint collision, P1 #2)
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('J. scope (P1 #2 regression)', () => {
+    class PaymentsController {}
+    class RefundsController {}
+
+    // Default = 'endpoint': the interceptor prepends class#method:: to the key.
+    it('scope=endpoint prefixes storage keys with ClassName#methodName::', async () => {
+      const { interceptor, storage } = buildInterceptor({ scope: 'endpoint' });
+      const handler = decoratedHandler({ enabled: true });
+      // Override the function name to make the assertion deterministic.
+      Object.defineProperty(handler, 'name', { value: 'createHandler' });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'shared-key' },
+          body: { v: 1 },
+        },
+        handler,
+        controller: PaymentsController,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'PaymentsController#createHandler::shared-key',
+        expect.any(String),
+        86_400,
+      );
+    });
+
+    // Different endpoints, same raw header value → different scoped keys,
+    // so both should successfully process without collision.
+    it('two different endpoints with the same header value do not collide under scope=endpoint', async () => {
+      const { interceptor, storage } = buildInterceptor({ scope: 'endpoint' });
+
+      // Payment call
+      const payHandler = decoratedHandler({ enabled: true });
+      Object.defineProperty(payHandler, 'name', { value: 'createHandler' });
+      const payCtx = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'shared-key' },
+          body: { amount: 100 },
+        },
+        handler: payHandler,
+        controller: PaymentsController,
+      });
+      await firstValueFrom(
+        interceptor.intercept(payCtx.context, buildCallHandler(of({ kind: 'pay' }))),
+      );
+
+      // Refund call — same header, different endpoint. Should go through cleanly.
+      const refundHdl = decoratedHandler({ enabled: true });
+      Object.defineProperty(refundHdl, 'name', { value: 'refundHandler' });
+      const refundCtx = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'shared-key' },
+          body: { amount: 100 },
+        },
+        handler: refundHdl,
+        controller: RefundsController,
+      });
+      const refundResult = await firstValueFrom(
+        interceptor.intercept(
+          refundCtx.context,
+          buildCallHandler(of({ kind: 'refund' })),
+        ),
+      );
+
+      // The refund call returned the refund handler's own response, NOT a
+      // replayed copy of the payment response.
+      expect(refundResult).toEqual({ kind: 'refund' });
+
+      // Both keys were created under different prefixes.
+      const createCalls = storage.create.mock.calls.map(([key]) => key);
+      expect(createCalls).toContain(
+        'PaymentsController#createHandler::shared-key',
+      );
+      expect(createCalls).toContain(
+        'RefundsController#refundHandler::shared-key',
+      );
+    });
+
+    // Custom scope function
+    it('scope=function applies the custom namespace', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        scope: () => 'tenant-42',
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K1' },
+          body: {},
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'tenant-42::K1',
+        expect.any(String),
+        86_400,
+      );
+    });
+
+    // Explicit 'global' scope: raw key, no prefix (legacy behavior).
+    it('scope=global uses the raw header value with no prefix', async () => {
+      const { interceptor, storage } = buildInterceptor({ scope: 'global' });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K1' },
+          body: {},
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'K1',
+        expect.any(String),
+        86_400,
+      );
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Group K: binary response detection (P2 regression)
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('K. binary response detection (P2 regression)', () => {
+    const nonReplayableCases: Array<{ name: string; build: () => unknown }> = [
+      {
+        name: 'Buffer',
+        build: () => Buffer.from('hello world', 'utf-8'),
+      },
+      {
+        name: 'Uint8Array',
+        build: () => new Uint8Array([1, 2, 3, 4]),
+      },
+      {
+        name: 'ArrayBuffer',
+        build: () => new ArrayBuffer(16),
+      },
+      {
+        name: 'Node Readable-like (has pipe)',
+        build: () => ({
+          pipe: () => undefined,
+          on: () => undefined,
+        }),
+      },
+      {
+        name: 'Web ReadableStream-like (has getReader)',
+        build: () => ({
+          getReader: () => ({ read: async () => ({ done: true }) }),
+        }),
+      },
+    ];
+
+    for (const { name, build } of nonReplayableCases) {
+      it(`skips caching for ${name} responses (delete + warn, caller still gets the value)`, async () => {
+        const { interceptor, storage } = buildInterceptor();
+        const handler = decoratedHandler({ enabled: true });
+        const { context } = buildExecutionContext({
+          req: {
+            method: 'GET',
+            headers: { 'idempotency-key': `K-${name}` },
+            body: {},
+          },
+          handler,
+        });
+        const original = build();
+        const next = buildCallHandler(of(original));
+        const warnSpy = jest
+          .spyOn(Logger.prototype, 'warn')
+          .mockImplementation();
+
+        const result = await firstValueFrom(
+          interceptor.intercept(context, next),
+        );
+
+        // The caller receives the original value unchanged.
+        expect(result).toBe(original);
+
+        // complete() was NEVER called with a JSON'd version of the value.
+        expect(storage.complete).not.toHaveBeenCalled();
+        // The lock record was released so a future request can retry.
+        expect(storage.delete).toHaveBeenCalledWith(
+          `K-${name}`,
+          expect.any(String),
+        );
+        // A warning explaining the type was emitted.
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringMatching(/not a plain JSON value/i),
+        );
+        warnSpy.mockRestore();
+      });
+    }
+
+    it('still caches plain objects normally (sanity check that the guard is not too aggressive)', async () => {
+      const { interceptor, storage } = buildInterceptor();
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-plain' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ id: 1, nested: { a: [1, 2] } }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.complete).toHaveBeenCalled();
+      expect(storage.delete).not.toHaveBeenCalled();
     });
   });
 });
