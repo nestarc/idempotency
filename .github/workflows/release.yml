@@ -160,10 +160,14 @@ jobs:
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
-          # Extract the section between "## [X.Y.Z]" and the next "## [" header.
+          # Extract the section between `## [X.Y.Z]` and the next `## [`
+          # header. The awk regex escapes the literal square brackets —
+          # unescaped, `[X.Y.Z]` would be a character class matching ANY
+          # single character in {X,.,Y,Z} and the match would fail on a
+          # real heading. (This was the v0.1.3 release-body bug.)
           if [ -f CHANGELOG.md ]; then
-            awk -v ver="## [$VERSION]" '
-              $0 ~ ver {flag=1; next}
+            awk -v ver="$VERSION" '
+              $0 ~ "^## \\[" ver "\\]" {flag=1; next}
               flag && /^## \[/ {flag=0}
               flag {print}
             ' CHANGELOG.md > release-body.md
