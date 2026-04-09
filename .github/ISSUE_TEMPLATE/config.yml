@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: IETF draft reference
+    url: https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/
+    about: The HTTP Idempotency-Key header specification this package implements.
+  - name: NestJS docs — Interceptors
+    url: https://docs.nestjs.com/interceptors
+    about: Background on how NestJS interceptors are wired.

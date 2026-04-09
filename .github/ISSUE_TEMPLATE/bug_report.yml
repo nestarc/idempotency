@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a correctness or behavior problem in @nestarc/idempotency
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Before you submit,
+        please verify that the issue is not fingerprint-based or a stale
+        install. The most common false alarms are:
+          - Client is sending a different body each retry (fingerprint mismatch → 422)
+          - Key reused across endpoints with `scope: 'global'` (by design)
+          - Dev server restart wiped MemoryStorage state (use RedisStorage in prod)
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: What version of `@nestarc/idempotency` are you using?
+      placeholder: 0.1.3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: nest-version
+    attributes:
+      label: NestJS version
+      options:
+        - '11.x'
+        - '10.x'
+        - Other (please specify in reproduction)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage adapter
+      options:
+        - MemoryStorage
+        - RedisStorage
+        - Custom adapter
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and the behavior you expected.
+      placeholder: |
+        I sent POST /payments twice with the same Idempotency-Key. I expected
+        the second response to be a replay of the first, but got ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        A minimal code snippet or link to a repo that reproduces the issue.
+        The smaller the better — ideally a single controller + forRoot call.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Any warnings or errors from the `IdempotencyInterceptor` Logger.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I verified the bug is not a fingerprint mismatch on a retried request with a different body.
+          required: true
+        - label: I am using a supported NestJS version (10.x or 11.x).
+          required: true
