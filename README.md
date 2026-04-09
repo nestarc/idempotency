@@ -199,33 +199,52 @@ Client Request (with Idempotency-Key header)
     ▼
 [IdempotencyInterceptor]
     │
-    ├─ 1. Read Idempotency-Key header
-    │     └─ missing + required=true → 400 Bad Request
+    ├─ 1. Read metadata + Idempotency-Key header
+    │     ├─ no @Idempotent → pass through
+    │     ├─ missing header + required=true → 400 Bad Request
+    │     └─ resolve TTL (reject 0/negative/fractional/NaN/Infinity)
     │
-    ├─ 2. Look up the key in storage
-    │     ├─ COMPLETED (fingerprint match) → replay cached response
-    │     ├─ COMPLETED (fingerprint mismatch) → 422 Unprocessable Entity
-    │     ├─ PROCESSING → 409 Conflict
-    │     └─ not found → continue to step 3
+    ├─ 2. Apply scope to the key
+    │     (default: `HTTP_METHOD /route::` from NestJS PATH_METADATA)
     │
-    ├─ 3. Atomically create a PROCESSING record (lock)
-    │     └─ lost race → 409 Conflict
+    ├─ 3. Look up the scoped key in storage
+    │     ├─ COMPLETED + fingerprint match       → replay cached response
+    │     ├─ fingerprint mismatch (any status)   → 422 Unprocessable Entity
+    │     ├─ PROCESSING                           → 409 Conflict
+    │     └─ not found                            → step 4
     │
-    ├─ 4. Run the controller handler
+    ├─ 4. Atomically create a PROCESSING record (token-based NX)
+    │     ├─ acquired=true  → step 5 with the returned token
+    │     └─ acquired=false → re-read the record and loop back to step 3
+    │                         (the winner may be COMPLETED → replay,
+    │                          COMPLETED+mismatch → 422, or PROCESSING → 409)
     │
-    └─ 5. Capture the response and store it as COMPLETED
-         └─ on error: delete the key (allow retry)
+    ├─ 5. Run the controller handler
+    │
+    └─ 6. Capture the response
+          ├─ plain JSON             → storage.complete(token, statusCode, body)
+          │   ├─ 'ok'               → emit handler value
+          │   ├─ 'stale' (TTL race) → warn + emit (don't clobber newer record)
+          │   └─ throws (transient) → ERROR log + emit (don't delete — retries
+          │                            hit 409 until TTL reclaims the record,
+          │                            never duplicate execution)
+          ├─ Buffer / stream / etc. → bypass cache + warn + emit + delete
+          └─ handler threw          → delete record (best-effort) + rethrow
 ```
 
 The interceptor uses RxJS `concatMap` to ensure the storage write completes **before** the response is emitted to the client — preventing a race window where a duplicate request arriving microseconds later could observe the wrong state.
 
+Storage adapters implement **token-based compare-and-set**: each `create()` returns an opaque token that the interceptor passes back to `complete()` / `delete()`. A slow caller whose PROCESSING record was evicted by TTL and replaced by a newer request cannot clobber the newer record — the storage returns `'stale'` and the interceptor logs a warning while still emitting the handler's value to the original caller.
+
 ## Error reference
 
-| Status | When                                                                       | IETF rationale            |
-| -----: | -------------------------------------------------------------------------- | ------------------------- |
-|    400 | `Idempotency-Key` header is missing and `required: true` (the default)     | client contract violation |
-|    409 | A record with this key is currently `PROCESSING`, or `create` lost a race  | concurrent duplicate      |
-|    422 | A record exists with this key but the request body fingerprint differs    | key reused with new payload |
+| Status | When                                                                                         | IETF rationale            |
+| -----: | -------------------------------------------------------------------------------------------- | ------------------------- |
+|    400 | `Idempotency-Key` header is missing and `required: true` (the default), or a configured `ttl` is not a positive integer | client contract / developer error |
+|    409 | The record under this scoped key is currently `PROCESSING` — either observed on the initial read or after losing an atomic `create()` race to a winner still in flight | concurrent duplicate      |
+|    422 | A record exists under this scoped key with a different request-body fingerprint (reused key with new payload)           | key reused with new payload |
+
+Note that v0.1.3+ returns a **replay** (not a 409) when the race winner has already finished — the interceptor re-reads the record on a lost `create()` race and dispatches through the same state machine as the initial-read branch.
 
 ## Storage adapters
 
@@ -302,20 +321,26 @@ The package ships a **shared contract test suite** at `test/support/shared-stora
 
 ## IETF spec compliance
 
-This package targets [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). v0.1 covers:
+This package targets [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). As of v0.1.3 it covers:
 
 - ✅ `Idempotency-Key` header recognition (configurable name)
-- ✅ Atomic key creation (lock semantics)
-- ✅ Response replay for completed requests
-- ✅ 409 Conflict for in-flight duplicates
-- ✅ 422 Unprocessable Entity for fingerprint mismatch
-- ✅ Configurable TTL with per-endpoint override
+- ✅ Atomic key creation with NX semantics (both adapters)
+- ✅ **Token-based compare-and-set** on every mutation — a slow caller whose record was evicted by TTL cannot clobber a newer caller's record
+- ✅ Response replay for completed requests (matching fingerprint)
+- ✅ **409 Conflict** only when the winner is genuinely still in flight (not for lost races against already-completed winners)
+- ✅ **422 Unprocessable Entity** for fingerprint mismatch — priority over PROCESSING state per draft semantics
+- ✅ Configurable TTL with per-endpoint override and boundary validation (positive integer only)
+- ✅ **Per-endpoint key scoping via `PATH_METADATA`** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /route::rawKey`, matching v1/v2 API isolation out of the box
+- ✅ Binary response detection — Buffer, typed arrays, and Node/Web streams are bypassed rather than cached as JSON garbage
+- ✅ **Transient storage-write failures** do NOT cause duplicate execution — a failing `complete()` is caught and the handler's response is still emitted to the caller
 
 Deferred to future versions:
 
 - 🚧 Response header replay (v0.2)
 - 🚧 PostgreSQL storage adapter (v0.2)
+- 🚧 Fastify adapter verification (v0.2)
 - 🚧 Stable JSON stringify for fingerprint (v0.2)
+- 🚧 Dual ESM/CJS build (v0.2)
 
 ## Caveats (v0.1)
 
