@@ -1,0 +1,13 @@
+src/
+test/
+docs/
+coverage/
+node_modules/
+*.tsbuildinfo
+.eslintrc.cjs
+.prettierrc
+jest.config.ts
+tsconfig.json
+tsconfig.build.json
+.gitignore
+.git/
