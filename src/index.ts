@@ -24,11 +24,14 @@ export type {
 export type {
   IdempotencyStorage,
   CompleteResponse,
+  CreateResult,
+  MutateResult,
 } from './interfaces/idempotency-storage.interface';
 export type {
   IdempotencyOptions,
   IdempotencyAsyncOptions,
   IdempotencyOptionsFactory,
+  IdempotencyScope,
   IdempotentOptions,
   IdempotentMetadata,
 } from './interfaces/idempotency-options.interface';

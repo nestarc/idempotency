@@ -166,8 +166,8 @@ The `scope` option controls how the storage key is derived from the raw header v
 
 | Value        | Behavior                                                                                     |
 | ------------ | -------------------------------------------------------------------------------------------- |
-| `'endpoint'` | **Default.** Prepends `ControllerName#methodName::` to the key. Two different endpoints using the same header value are fully isolated. Matches the IETF draft recommendation that idempotency is scoped per (key, request URI). |
-| `'global'`   | Legacy behavior: use the raw header value as-is. Safe only if clients guarantee globally-unique keys across all endpoints. |
+| `'endpoint'` | **Default.** Prepends `HTTP_METHOD /route::` to the key, using the actual route path read from NestJS `PATH_METADATA` (e.g. `POST /payments::my-key`). Two endpoints with different route paths are isolated even if their controller classes share a name (v1/v2 APIs, same-named controllers across modules). If the handler has no `PATH_METADATA` (custom decorators, non-NestJS integrations), it gracefully falls back to `ControllerClassName#methodName::`. |
+| `'global'`   | Use the raw header value as-is. Safe only if clients guarantee globally-unique keys across all endpoints (Stripe-style). |
 | function     | `(ctx: ExecutionContext) => string`. Fully custom scoping — useful in multi-tenant systems where the scope should include the tenant id. The returned string is joined to the raw key with `::`. |
 
 ```ts
@@ -238,20 +238,65 @@ The interceptor uses RxJS `concatMap` to ensure the storage write completes **be
 
 ### Custom storage adapters
 
-Implement the `IdempotencyStorage` interface:
+Implement the `IdempotencyStorage` interface. The contract is **token-based compare-and-set**: `create()` returns an opaque token, and `complete()` / `delete()` require the caller to pass the matching token back. This prevents a slow caller whose record was evicted by TTL from clobbering a newer caller's record.
 
 ```ts
-import type { IdempotencyStorage } from '@nestarc/idempotency';
+import type {
+  IdempotencyStorage,
+  IdempotencyRecord,
+  CreateResult,
+  CompleteResponse,
+  MutateResult,
+} from '@nestarc/idempotency';
+import type { OnModuleDestroy } from '@nestjs/common';
 
-class MyStorage implements IdempotencyStorage {
-  async get(key) { ... }
-  async create(key, fingerprint, ttlSeconds) { ... }
-  async complete(key, response, ttlSeconds) { ... }
-  async delete(key) { ... }
+class MyStorage implements IdempotencyStorage, OnModuleDestroy {
+  async get(key: string): Promise<IdempotencyRecord | null> {
+    // Return the record, or null if it doesn't exist / has expired.
+  }
+
+  async create(
+    key: string,
+    fingerprint: string | undefined,
+    ttlSeconds: number,
+  ): Promise<CreateResult> {
+    // NX semantics: if the key already exists, return { acquired: false }.
+    // Otherwise, generate an opaque token (e.g. randomUUID()), persist it
+    // alongside the PROCESSING record, and return { acquired: true, token }.
+    // `createdAt` must equal the moment of creation and be preserved
+    // verbatim across subsequent complete() calls.
+  }
+
+  async complete(
+    key: string,
+    token: string,
+    response: CompleteResponse,
+    ttlSeconds: number,
+  ): Promise<MutateResult> {
+    // Compare-and-set: only mutate the record if its stored token matches
+    // the caller's. Return 'ok' on success; return 'stale' if the token
+    // does NOT match (the original record was evicted and replaced) or if
+    // the record is missing. Refresh `expiresAt` to now + ttlSeconds, but
+    // preserve the original `createdAt`.
+  }
+
+  async delete(key: string, token: string): Promise<MutateResult> {
+    // Idempotent cleanup: return 'ok' if the record matched-and-was-removed
+    // OR was already absent. Return 'stale' only if a DIFFERENT record
+    // (with a different token) exists under this key — in that case, do
+    // NOT remove it.
+  }
+
+  // Optional but recommended: Nest will call this during app.close().
+  async onModuleDestroy(): Promise<void> {
+    // Release any external resources (DB connections, timers, ...).
+  }
 }
 ```
 
 Then pass an instance to `IdempotencyModule.forRoot({ storage: new MyStorage() })`.
+
+The package ships a **shared contract test suite** at `test/support/shared-storage-contract.ts` (in the source tree, not exported) that encodes every behavioral guarantee above. Custom adapters are encouraged to copy it into their own repo and plug in via `describeStorageContract('MyStorage', factory)` to catch LSP drift before it ships.
 
 ## IETF spec compliance
 

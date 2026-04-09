@@ -104,7 +104,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const opts = this.resolveOptions(metadata);
+    // resolveOptions throws sync on invalid TTL — convert to an Observable
+    // error so callers uniformly await rejection via firstValueFrom/subscribe.
+    let opts: ResolvedOptions;
+    try {
+      opts = this.resolveOptions(metadata);
+    } catch (err) {
+      return throwError(() => err);
+    }
     const http = context.switchToHttp();
     const req = http.getRequest<{
       headers: Record<string, string | string[] | undefined>;
@@ -212,11 +219,26 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return from(this.storage.create(scopedKey, fingerprint, opts.ttl)).pipe(
       switchMap((createResult) => {
         if (!createResult.acquired || !createResult.token) {
-          return throwError(
-            () =>
-              new ConflictException(
-                `Request with this Idempotency-Key is already being processed`,
-              ),
+          // We lost the race — between our initial get() and this create(),
+          // a concurrent request slipped in. Re-read the record to find out
+          // what state it's in. If the winner already finished (COMPLETED),
+          // the correct response is REPLAY (matching fingerprint) or 422
+          // (mismatch). If the winner is still in-flight (PROCESSING), 409.
+          // Only if the record vanished between create() and the re-read
+          // (impossible in normal operation but defensive) do we fall back
+          // to 409 with no better signal.
+          return from(this.storage.get(scopedKey)).pipe(
+            switchMap((raced) => {
+              if (!raced) {
+                return throwError(
+                  () =>
+                    new ConflictException(
+                      `Request with this Idempotency-Key is already being processed`,
+                    ),
+                );
+              }
+              return this.handleExistingRecord(raced, fingerprint, res);
+            }),
           );
         }
         const token = createResult.token;
@@ -226,7 +248,18 @@ export class IdempotencyInterceptor implements NestInterceptor {
             this.captureResponse(scopedKey, token, value, res, opts.ttl),
           ),
           catchError((err) =>
+            // Handler failure ONLY — captureResponse is total and never
+            // throws storage errors up to this point. Safe to delete the
+            // record and re-throw the handler's exception.
             from(this.storage.delete(scopedKey, token)).pipe(
+              // Even the delete is best-effort. If cleanup fails we still
+              // propagate the original handler error; the record will TTL out.
+              catchError((delErr) => {
+                this.logger.warn(
+                  `storage.delete() failed during handler-error cleanup for key="${scopedKey}": ${(delErr as Error).message}. Propagating original handler error.`,
+                );
+                return of(undefined);
+              }),
               switchMap(() => throwError(() => err)),
             ),
           ),
@@ -242,11 +275,17 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * - Non-replayable types (Buffer, streams) → bypass cache + warn
    * - JSON serialization failure (circular refs) → bypass cache + warn
    * - Storage complete() returns 'stale' → emit anyway + warn
+   * - Storage complete() THROWS (transient failure) → emit anyway + error log,
+   *   **do not delete the record**. The handler succeeded; a transient write
+   *   failure must not turn a successful business operation into a retryable
+   *   failure for the client. The PROCESSING record stays in place until
+   *   TTL reclaims it; retries in that window correctly hit 409.
    * - Otherwise → persist and emit the original value
    *
-   * This is the "response capture" responsibility, which changes for
-   * different reasons than lock acquisition or state dispatch — so it
-   * lives in its own method.
+   * CRITICAL: this method is *total* — it never lets an exception escape.
+   * The caller's `catchError` in {@link acquireAndRun} is strictly for
+   * HANDLER errors; mixing in storage errors here would delete the record
+   * and cause duplicate execution on retry (pre-v0.1.3 regression).
    */
   private captureResponse(
     scopedKey: string,
@@ -261,6 +300,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
         `Response for key="${scopedKey}" is not a plain JSON value (type=${IdempotencyInterceptor.describeType(value)}); skipping cache`,
       );
       return from(this.storage.delete(scopedKey, token)).pipe(
+        // Even the cleanup-delete is total — if it throws, emit the value
+        // anyway. The handler already succeeded.
+        catchError((err) => {
+          this.logger.warn(
+            `storage.delete() failed during non-replayable cleanup for key="${scopedKey}": ${(err as Error).message}. Emitting handler value anyway.`,
+          );
+          return of(undefined);
+        }),
         map(() => value),
       );
     }
@@ -275,6 +322,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
         `Response for key="${scopedKey}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
       );
       return from(this.storage.delete(scopedKey, token)).pipe(
+        catchError((delErr) => {
+          this.logger.warn(
+            `storage.delete() failed during serialization-failure cleanup for key="${scopedKey}": ${(delErr as Error).message}. Emitting handler value anyway.`,
+          );
+          return of(undefined);
+        }),
         map(() => value),
       );
     }
@@ -299,13 +352,36 @@ export class IdempotencyInterceptor implements NestInterceptor {
         }
         return value;
       }),
+      // CRITICAL: swallow storage.complete() exceptions. The handler already
+      // succeeded; a transient cache-write failure must not cause duplicate
+      // execution on retry. The PROCESSING record stays and retries see 409
+      // until TTL reclaims it — the lesser evil vs. re-running a successful
+      // business operation.
+      catchError((err) => {
+        this.logger.error(
+          `storage.complete() threw for key="${scopedKey}": ${(err as Error).message}. Handler succeeded; emitting value without cache. Retries will see 409 until TTL expires.`,
+        );
+        return of(value);
+      }),
     );
   }
 
   private resolveOptions(metadata: IdempotentMetadata): ResolvedOptions {
+    const ttl =
+      metadata.ttl ?? this.moduleOptions.ttl ?? DEFAULT_TTL_SECONDS;
+    // Guard against footguns: ttl must be a positive integer number of seconds.
+    // A zero or negative TTL would produce immediately-expired records (Redis
+    // in particular rejects EX <= 0), and fractional seconds round unpredictably
+    // across adapters. Fail fast at the interceptor boundary so the error
+    // surfaces at request time with the exact bad value.
+    if (typeof ttl !== 'number' || !Number.isFinite(ttl) || !Number.isInteger(ttl) || ttl <= 0) {
+      throw new Error(
+        `IdempotencyInterceptor: ttl must be a positive integer number of seconds, received ${String(ttl)}`,
+      );
+    }
     return {
       required: metadata.required ?? true,
-      ttl: metadata.ttl ?? this.moduleOptions.ttl ?? DEFAULT_TTL_SECONDS,
+      ttl,
       fingerprint:
         metadata.fingerprint ?? this.moduleOptions.fingerprint ?? true,
       headerName: this.moduleOptions.headerName ?? DEFAULT_HEADER_NAME,
@@ -316,6 +392,18 @@ export class IdempotencyInterceptor implements NestInterceptor {
   /**
    * Derives the namespaced storage key from the raw header value according
    * to the configured {@link IdempotencyScope}.
+   *
+   * For `scope: 'endpoint'` (the default), the interceptor attempts to read
+   * the real route path via NestJS's `PATH_METADATA` (set by `@Controller`
+   * and `@Get`/`@Post`/etc.) so the storage key is scoped by the actual
+   * HTTP method + URI — matching the IETF draft recommendation and
+   * surviving class-name collisions across modules (e.g. v1 vs v2
+   * controllers that happen to share a class name).
+   *
+   * If `PATH_METADATA` is unavailable (custom decorators, non-NestJS
+   * controllers, or test fixtures without metadata), it falls back to the
+   * legacy `ControllerClassName#methodName` scope — which is still safer
+   * than no scope at all.
    */
   private applyScope(
     scope: IdempotencyScope,
@@ -328,12 +416,53 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (typeof scope === 'function') {
       return `${scope(context)}::${rawKey}`;
     }
-    // 'endpoint' — Controller class name + handler method name.
-    // `::` cannot appear in JS identifiers so there is no collision risk.
-    const className = context.getClass()?.name ?? 'UnknownController';
-    const methodName = context.getHandler()?.name ?? 'unknownHandler';
-    return `${className}#${methodName}::${rawKey}`;
+    return `${this.computeEndpointScope(context)}::${rawKey}`;
   }
+
+  /**
+   * Computes the endpoint scope prefix for a given execution context.
+   * Split out of {@link applyScope} so the fallback chain is easy to read
+   * and independently testable.
+   */
+  private computeEndpointScope(context: ExecutionContext): string {
+    const controller = context.getClass();
+    const handler = context.getHandler();
+
+    // Attempt HTTP-route scoping first. Both pieces of path metadata are
+    // stamped by NestJS controller/method decorators — reader is safe to
+    // use even when the metadata is absent (it returns undefined).
+    const controllerPath = this.reflector.get<string | undefined>(
+      IdempotencyInterceptor.NEST_PATH_METADATA,
+      controller,
+    );
+    const handlerPath = this.reflector.get<string | undefined>(
+      IdempotencyInterceptor.NEST_PATH_METADATA,
+      handler,
+    );
+
+    if (controllerPath !== undefined && handlerPath !== undefined) {
+      const req = context.switchToHttp().getRequest<{ method?: string }>();
+      const httpMethod = (req?.method ?? 'UNKNOWN').toUpperCase();
+      // Normalize slashes: collapse duplicates, ensure single leading slash.
+      const joined = `/${controllerPath}/${handlerPath}`
+        .replace(/\/+/g, '/')
+        .replace(/\/+$/, '') || '/';
+      return `${httpMethod} ${joined}`;
+    }
+
+    // Fallback: class name + method name. Not URL-accurate but isolates
+    // handlers within a single controller at minimum.
+    const className = controller?.name ?? 'UnknownController';
+    const methodName = handler?.name ?? 'unknownHandler';
+    return `${className}#${methodName}`;
+  }
+
+  /**
+   * Internal NestJS metadata key used by `@Controller()` / `@Get()` / etc.
+   * to stamp the route path on the target. Exposed as a private static
+   * so the string literal is centralized and documented.
+   */
+  private static readonly NEST_PATH_METADATA = 'path';
 
   private computeFingerprint(body: unknown): string {
     return createHash('sha256')

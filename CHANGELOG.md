@@ -4,6 +4,92 @@ All notable changes to `@nestarc/idempotency` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-04-09
+
+Correctness pass addressing four findings from a cross-review. All four
+are fixed with regression coverage; two related residual risks (TTL
+edge values, true concurrent e2e) are also addressed. Still
+pre-publication — no external breakage.
+
+### Fixed
+
+- **P0: `storage.complete()` failure triggered duplicate execution.**
+  When the handler had already succeeded but `storage.complete()` threw
+  (e.g. transient Redis outage), the interceptor's outer `catchError`
+  treated the storage error like a handler error, deleted the
+  PROCESSING record, and rethrew. The client's retry found no record
+  and ran the handler a second time — a hard break of the at-most-once
+  guarantee. `captureResponse` is now **total**: a `complete()`
+  exception is caught locally, logged at ERROR level, and the handler's
+  value is emitted to the client. The PROCESSING record stays in place
+  and any retries correctly see 409 until TTL reclaims it. Best-effort
+  error logging is also added around `delete()` cleanup paths.
+- **P1: `get()` → `create()` race spuriously returned 409 when the
+  winner was already COMPLETED.** The loser's `create()` returned
+  `acquired: false` and the interceptor immediately threw 409 without
+  re-reading the record. The correct dispatch requires knowing the
+  winner's current state: replay (COMPLETED + matching fingerprint),
+  422 (COMPLETED + different fingerprint), or 409 (still PROCESSING).
+  `acquireAndRun` now re-reads the record on `acquired: false` and
+  dispatches through `handleExistingRecord`, giving the loser the same
+  state-machine paths as the initial-read branch. Falls back to 409
+  only if the record has vanished between `create()` and the re-read.
+- **P2: `scope: 'endpoint'` could collide across modules with the same
+  class name.** Pre-0.1.3 the scope prefix was
+  `ControllerClassName#methodName::`, which broke as soon as two
+  controllers in separate modules shared a class name (e.g. v1/v2 APIs
+  both defining a `UsersController`). The scope now reads the real
+  route path from NestJS `PATH_METADATA` (stamped by `@Controller` /
+  `@Post` / etc.) and builds a `HTTP_METHOD /route::` prefix. Falls
+  back to the legacy `ClassName#methodName::` when path metadata is
+  absent (custom decorators, non-NestJS controllers).
+- **P2: README custom-storage example used the pre-token contract.**
+  The `class MyStorage implements IdempotencyStorage` example showed
+  `create(key, fp, ttl)` and `complete(key, response, ttl)` / `delete(key)`
+  — the v0.1.0 signatures, predating the token-based CAS introduced in
+  v0.1.1. Consumers who tried to follow the example would hit a
+  TypeScript compile error. The README now documents the token-based
+  contract, the `MutateResult` return type, and the `OnModuleDestroy`
+  lifecycle recommendation.
+
+### Added
+
+- **TTL validation at the interceptor boundary.** `resolveOptions()`
+  now rejects zero, negative, fractional, `NaN`, and `Infinity` TTL
+  values with a descriptive error that names the offending value.
+  Previously these would reach storage adapters where behavior diverged
+  (Redis rejects `EX 0`; MemoryStorage would schedule a 0ms timer and
+  evict immediately). The sync throw is converted to an Observable
+  error so callers see a uniform rejection path.
+- **Concurrent e2e regression test.** Two identical requests fired via
+  `Promise.all` against the real NestJS app must result in **exactly
+  one** handler invocation. The loser's response must either replay
+  the winner (COMPLETED race) or return 409 (in-flight collision). No
+  duplicate business-logic execution under any scheduling.
+- **Regression test suite at `test/regression/`** covering every fix
+  above (3 files, 11 new tests):
+  - `complete-failure-cascade.spec.ts` — 1 test
+  - `race-completed-winner.spec.ts` — 4 tests (COMPLETED replay,
+    COMPLETED mismatch → 422, PROCESSING → 409, vanished → 409)
+  - `path-based-scope.spec.ts` — 2 tests (cross-module isolation,
+    key-prefix shape assertion)
+  - `ttl-validation.spec.ts` — 11 tests (5 invalid values × 2 levels
+    + 1 valid baseline)
+- Public exports: `CreateResult`, `MutateResult`, `IdempotencyScope`.
+  Previously documented in the type-level contract but not surfaced
+  from the barrel.
+
+### Changed (internal / non-breaking)
+
+- `IdempotencyInterceptor.intercept()` wraps the sync `resolveOptions()`
+  call in a try/catch that forwards the exception as an Observable
+  error via `throwError`, so all error paths share a single
+  subscription shape.
+- `IdempotencyInterceptor.applyScope()` delegates to a new
+  `computeEndpointScope(context)` helper and introduces a private
+  static `NEST_PATH_METADATA = 'path'` constant documenting the
+  hardcoded NestJS metadata key.
+
 ## [0.1.2] — 2026-04-09
 
 SOLID-principles hardening pass. Three findings against v0.1.1 are

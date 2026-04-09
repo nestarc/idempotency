@@ -232,6 +232,50 @@ describe('Idempotency (e2e)', () => {
     expect(callCounter.cross).toBe(1); // still 1
   });
 
+  // Concurrency regression: two identical requests fired simultaneously
+  // must result in exactly ONE handler invocation. The loser must either
+  // replay the winner's response (COMPLETED race) or receive 409 (if it
+  // observes the winner still in-flight). No duplicate execution allowed.
+  it('handles two truly-concurrent identical requests with exactly one handler call', async () => {
+    const server = app.getHttpServer();
+
+    // Use Promise.all to fire both requests before either has a chance
+    // to finish. Both use the same Idempotency-Key and the same body.
+    const [a, b] = await Promise.all([
+      request(server)
+        .post('/payments')
+        .set('Idempotency-Key', 'concurrent-key')
+        .send({ amount: 777 }),
+      request(server)
+        .post('/payments')
+        .set('Idempotency-Key', 'concurrent-key')
+        .send({ amount: 777 }),
+    ]);
+
+    // Exactly one handler invocation.
+    expect(callCounter.create).toBe(1);
+
+    // Acceptable outcomes per IETF draft:
+    //   - Both 201 with identical body (replay path)
+    //   - One 201, one 409 (in-flight collision path)
+    // Both paths satisfy at-most-once, the only invariant that matters.
+    const statuses = [a.status, b.status].sort();
+    expect(statuses[0]).toBeLessThanOrEqual(statuses[1]);
+
+    const winners = [a, b].filter((r) => r.status === 201);
+    expect(winners.length).toBeGreaterThanOrEqual(1);
+
+    if (winners.length === 2) {
+      // Both succeeded — responses must be identical (one is a replay).
+      expect(winners[0].body).toEqual(winners[1].body);
+    } else {
+      // One 201, one other (409 expected for in-flight collision).
+      const others = [a, b].filter((r) => r.status !== 201);
+      expect(others).toHaveLength(1);
+      expect(others[0].status).toBe(409);
+    }
+  });
+
   // P1 #2 regression, negative case: different body on the OTHER endpoint
   // must NOT produce a false 422 from a neighboring endpoint's fingerprint.
   it('returns 201 (not 422) when a different endpoint reuses the key with a different body', async () => {
