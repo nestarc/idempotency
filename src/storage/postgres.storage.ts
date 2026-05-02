@@ -195,8 +195,28 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
     }
   }
 
-  async delete(_key: string, _token: string): Promise<MutateResult> {
-    throw new Error('not implemented');
+  async delete(key: string, token: string): Promise<MutateResult> {
+    let deletedCount: number;
+    try {
+      const del = await this.pool.query(
+        `DELETE FROM ${quoteIdent(this.tableName)} WHERE key = $1 AND token = $2`,
+        [key, token],
+      );
+      deletedCount = del.rowCount ?? 0;
+    } catch (err) {
+      if (!isInvalidTextRepresentation(err)) throw err;
+      // Non-UUID token cannot own any row — same outcome as a CAS miss.
+      // Fall through to the existence check below.
+      deletedCount = 0;
+    }
+    if (deletedCount === 1) return 'ok';
+    // 0 rows affected: either the key is missing (idempotent cleanup → 'ok')
+    // or a different (real UUID) token owns the row (caller is stale → 'stale').
+    const exists = await this.pool.query(
+      `SELECT 1 FROM ${quoteIdent(this.tableName)} WHERE key = $1`,
+      [key],
+    );
+    return exists.rowCount === 0 ? 'ok' : 'stale';
   }
 
   async close(): Promise<void> {
