@@ -908,12 +908,13 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
 
   it('create() replaces an expired row with a fresh PROCESSING record', async () => {
     const storage = new PostgresStorage({ pool });
-    // Insert a row that is already expired by 1 second.
+    // Seed a COMPLETED row with non-null statusCode/body so we can assert
+    // they are cleared by the ON CONFLICT DO UPDATE branch.
     await pool.query(
       `INSERT INTO idempotency_records
-         (key, token, fingerprint, status, expires_at)
+         (key, token, fingerprint, status, response_code, response_body, expires_at)
        VALUES ('expired-key', gen_random_uuid(), 'old-fp', 'COMPLETED',
-               now() - interval '1 second')`,
+               200, '{"prior":"body"}', now() - interval '1 second')`,
     );
 
     const result = await storage.create('expired-key', 'new-fp', 60);
@@ -924,6 +925,9 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
     expect(row!.status).toBe('PROCESSING');
     expect(row!.fingerprint).toBe('new-fp');
     expect(row!.token).toBe(result.token);
+    // Cleared on replacement (was 200 / '{"prior":"body"}' before).
+    expect(row!.statusCode).toBeUndefined();
+    expect(row!.responseBody).toBeUndefined();
   });
 
   it('createSchema() is idempotent — calling twice does not throw', async () => {
@@ -961,16 +965,19 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
   it('autoCreateSchema=true creates the table on module init when missing', async () => {
     // Drop the default table to simulate a fresh DB.
     await pool.query('DROP TABLE IF EXISTS idempotency_records');
-    const storage = new PostgresStorage({ pool, autoCreateSchema: true });
-    await storage.onModuleInit();
+    try {
+      const storage = new PostgresStorage({ pool, autoCreateSchema: true });
+      await storage.onModuleInit();
 
-    const exists = await pool.query<{ to_regclass: string | null }>(
-      `SELECT to_regclass('idempotency_records') AS to_regclass`,
-    );
-    expect(exists.rows[0].to_regclass).toBe('idempotency_records');
-
-    // Re-create the schema for the rest of the suite.
-    await PostgresStorage.createSchema(pool);
+      const exists = await pool.query<{ to_regclass: string | null }>(
+        `SELECT to_regclass('idempotency_records') AS to_regclass`,
+      );
+      expect(exists.rows[0].to_regclass).toBe('idempotency_records');
+    } finally {
+      // Restore default schema even on assertion failure so the next test (or
+      // the next jest run after a failed run) starts from a known state.
+      await PostgresStorage.createSchema(pool);
+    }
   });
 });
 ```
