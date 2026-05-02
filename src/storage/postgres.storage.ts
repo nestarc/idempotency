@@ -149,12 +149,29 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
   }
 
   async complete(
-    _key: string,
-    _token: string,
-    _response: CompleteResponse,
-    _ttlSeconds: number,
+    key: string,
+    token: string,
+    response: CompleteResponse,
+    ttlSeconds: number,
   ): Promise<MutateResult> {
-    throw new Error('not implemented');
+    try {
+      const result = await this.pool.query(
+        `UPDATE ${quoteIdent(this.tableName)}
+           SET status        = 'COMPLETED',
+               response_code = $3,
+               response_body = $4,
+               expires_at    = now() + ($5 || ' seconds')::interval
+           WHERE key = $1 AND token = $2 AND status = 'PROCESSING'`,
+        [key, token, response.statusCode, response.body ?? null, String(ttlSeconds)],
+      );
+      return result.rowCount === 1 ? 'ok' : 'stale';
+    } catch (err) {
+      // 22P02 = invalid_text_representation (e.g. a non-UUID token literal).
+      // A token that cannot be a UUID cannot match any row, so this is the
+      // CAS-fail path → 'stale'.
+      if ((err as { code?: string }).code === '22P02') return 'stale';
+      throw err;
+    }
   }
 
   async delete(_key: string, _token: string): Promise<MutateResult> {
