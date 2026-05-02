@@ -637,6 +637,8 @@ conflicts from successful (re)acquisitions."
 
 When replacing the `complete()` body, rename the parameters from `_key`, `_token`, `_response`, `_ttlSeconds` to `key`, `token`, `response`, `ttlSeconds`.
 
+The schema's `token UUID NOT NULL` column rejects non-UUID literals at parse time with Postgres error code `22P02` (`invalid_text_representation`) — and the shared contract tests deliberately use `'wrong-token'` (not a UUID) to drive the stale-token CAS path. Wrap the query in a `try/catch` that maps `22P02` to `'stale'`: a token that cannot be a UUID cannot match any row, so this is semantically the CAS-fail path.
+
 Replace the `async complete(...)` method body:
 
 ```typescript
@@ -646,16 +648,24 @@ async complete(
   response: CompleteResponse,
   ttlSeconds: number,
 ): Promise<MutateResult> {
-  const result = await this.pool.query(
-    `UPDATE ${quoteIdent(this.tableName)}
-       SET status        = 'COMPLETED',
-           response_code = $3,
-           response_body = $4,
-           expires_at    = now() + ($5 || ' seconds')::interval
-       WHERE key = $1 AND token = $2 AND status = 'PROCESSING'`,
-    [key, token, response.statusCode, response.body ?? null, String(ttlSeconds)],
-  );
-  return result.rowCount === 1 ? 'ok' : 'stale';
+  try {
+    const result = await this.pool.query(
+      `UPDATE ${quoteIdent(this.tableName)}
+         SET status        = 'COMPLETED',
+             response_code = $3,
+             response_body = $4,
+             expires_at    = now() + ($5 || ' seconds')::interval
+         WHERE key = $1 AND token = $2 AND status = 'PROCESSING'`,
+      [key, token, response.statusCode, response.body ?? null, String(ttlSeconds)],
+    );
+    return result.rowCount === 1 ? 'ok' : 'stale';
+  } catch (err) {
+    // 22P02 = invalid_text_representation (e.g. a non-UUID token literal).
+    // A token that cannot be a UUID cannot match any row, so this is the
+    // CAS-fail path → 'stale'.
+    if ((err as { code?: string }).code === '22P02') return 'stale';
+    throw err;
+  }
 }
 ```
 
@@ -674,7 +684,10 @@ Token check is enforced inside the UPDATE WHERE clause so the SQL
 itself is the compare-and-set. created_at is omitted from the SET clause
 so the IdempotencyRecord invariant is preserved automatically — the DB
 keeps the original timestamp untouched. Defensive AND status =
-'PROCESSING' guards against double-completion."
+'PROCESSING' guards against double-completion. Non-UUID token literals
+(used by the shared contract's stale-token tests) raise Postgres code
+22P02; we map that to 'stale' since a malformed token cannot match any
+row."
 ```
 
 ---
@@ -688,17 +701,27 @@ keeps the original timestamp untouched. Defensive AND status =
 
 When replacing the `delete()` body, rename the parameters from `_key`, `_token` to `key`, `token`.
 
+Same caveat as `complete()`: the `token UUID NOT NULL` column raises Postgres code `22P02` (`invalid_text_representation`) for non-UUID token literals, and the shared contract uses `'wrong-token'` to drive the stale-token path here too. Wrap the DELETE in a `try/catch` that swallows `22P02` and falls through to the existence check — a malformed token cannot own any row, so the existence check correctly distinguishes "missing key → `'ok'`" from "row exists under a real UUID token → `'stale'`". This preserves the contract's wrong-token semantics without weakening the `UUID` column type.
+
 Replace the `async delete(...)` method body:
 
 ```typescript
 async delete(key: string, token: string): Promise<MutateResult> {
-  const del = await this.pool.query(
-    `DELETE FROM ${quoteIdent(this.tableName)} WHERE key = $1 AND token = $2`,
-    [key, token],
-  );
-  if (del.rowCount === 1) return 'ok';
-  // 0 rows affected: either the key is missing (idempotent cleanup → 'ok')
-  // or a different token owns the row (caller is stale → 'stale').
+  let deletedCount = 0;
+  try {
+    const del = await this.pool.query(
+      `DELETE FROM ${quoteIdent(this.tableName)} WHERE key = $1 AND token = $2`,
+      [key, token],
+    );
+    deletedCount = del.rowCount ?? 0;
+  } catch (err) {
+    // 22P02 = invalid_text_representation (non-UUID token). A malformed
+    // token cannot own any row. Fall through to the existence check —
+    // if the row exists under a real UUID token, this caller is stale;
+    // otherwise idempotent cleanup → 'ok'.
+    if ((err as { code?: string }).code !== '22P02') throw err;
+  }
+  if (deletedCount === 1) return 'ok';
   const exists = await this.pool.query(
     `SELECT 1 FROM ${quoteIdent(this.tableName)} WHERE key = $1`,
     [key],
@@ -720,7 +743,10 @@ git commit -m "feat(postgres): implement delete() with idempotent-cleanup
 
 Two-step pattern: DELETE WHERE token matches first (fast path), then
 SELECT to distinguish 'already absent' (ok) from 'different token owns
-this row' (stale). Closes the shared storage contract — all 10 LSP
+this row' (stale). Non-UUID token literals raise Postgres code 22P02;
+the catch lets us fall through to the existence check so the
+missing-key/different-token distinction is preserved without weakening
+the UUID column type. Closes the shared storage contract — all 10 LSP
 invariants now pass for PostgresStorage."
 ```
 
