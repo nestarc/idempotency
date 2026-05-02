@@ -70,9 +70,9 @@ function isInvalidTextRepresentation(err: unknown): boolean {
  */
 @Injectable()
 export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
-  private readonly pool: Pool;
+  /** @internal */ readonly pool: Pool;
   private readonly ownsPool: boolean;
-  private readonly tableName: string;
+  /** @internal */ readonly tableName: string;
   private readonly autoCreateSchema: boolean;
 
   constructor(options: PostgresStorageOptions) {
