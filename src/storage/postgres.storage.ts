@@ -1,4 +1,5 @@
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import type { Pool, PoolConfig } from 'pg';
 
 import type {
@@ -120,11 +121,31 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
   }
 
   async create(
-    _key: string,
-    _fingerprint: string | undefined,
-    _ttlSeconds: number,
+    key: string,
+    fingerprint: string | undefined,
+    ttlSeconds: number,
   ): Promise<CreateResult> {
-    throw new Error('not implemented');
+    const token = randomUUID();
+    const result = await this.pool.query<{ token: string }>(
+      `INSERT INTO ${quoteIdent(this.tableName)}
+         (key, token, fingerprint, status, expires_at)
+       VALUES ($1, $2, $3, 'PROCESSING', now() + ($4 || ' seconds')::interval)
+       ON CONFLICT (key) DO UPDATE
+         SET token = EXCLUDED.token,
+             fingerprint = EXCLUDED.fingerprint,
+             status = 'PROCESSING',
+             response_code = NULL,
+             response_body = NULL,
+             created_at = now(),
+             expires_at = EXCLUDED.expires_at
+         WHERE ${quoteIdent(this.tableName)}.expires_at < now()
+       RETURNING token`,
+      [key, token, fingerprint ?? null, String(ttlSeconds)],
+    );
+    if (result.rowCount === 1) {
+      return { acquired: true, token };
+    }
+    return { acquired: false };
   }
 
   async complete(
