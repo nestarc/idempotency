@@ -1,5 +1,6 @@
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { DatabaseError } from 'pg';
 import type { Pool, PoolConfig } from 'pg';
 
 import type {
@@ -37,6 +38,23 @@ export interface PostgresStorageOptions {
 }
 
 const DEFAULT_TABLE_NAME = 'idempotency_records';
+
+/**
+ * Postgres SQLSTATE for `invalid_text_representation` — raised when a value
+ * cannot be cast to its target type (e.g. a non-UUID literal supplied for
+ * a UUID column).
+ */
+const PG_INVALID_TEXT_REPRESENTATION = '22P02';
+
+/**
+ * True when `err` is a `DatabaseError` with SQLSTATE 22P02. Used to map
+ * malformed token literals to the CAS-fail path so callers see `'stale'`
+ * (or fall through to an existence check in `delete()`) instead of an
+ * unrelated runtime exception. See spec §4.3 / §4.4.
+ */
+function isInvalidTextRepresentation(err: unknown): boolean {
+  return err instanceof DatabaseError && err.code === PG_INVALID_TEXT_REPRESENTATION;
+}
 
 /**
  * Postgres-backed implementation of {@link IdempotencyStorage}.
@@ -156,6 +174,9 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
   ): Promise<MutateResult> {
     try {
       const result = await this.pool.query(
+        // NOTE: created_at is intentionally NOT in the SET clause — leaving it
+        // untouched preserves the IdempotencyRecord.createdAt invariant
+        // (shared-storage-contract test "complete() preserves createdAt").
         `UPDATE ${quoteIdent(this.tableName)}
            SET status        = 'COMPLETED',
                response_code = $3,
@@ -166,10 +187,10 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
       );
       return result.rowCount === 1 ? 'ok' : 'stale';
     } catch (err) {
-      // 22P02 = invalid_text_representation (e.g. a non-UUID token literal).
-      // A token that cannot be a UUID cannot match any row, so this is the
-      // CAS-fail path → 'stale'.
-      if ((err as { code?: string }).code === '22P02') return 'stale';
+      // A non-UUID token literal cannot match any row, so this is the
+      // CAS-fail path → 'stale'. Valid-but-non-matching UUIDs are handled
+      // via rowCount=0 above (no exception is thrown for them).
+      if (isInvalidTextRepresentation(err)) return 'stale';
       throw err;
     }
   }

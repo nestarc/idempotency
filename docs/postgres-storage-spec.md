@@ -174,7 +174,7 @@ RETURNING 1;
 - `rowCount === 1` → `'ok'`
 - `rowCount === 0` → `'stale'` (토큰 불일치 또는 행 없음)
 
-**구현 노트 — `22P02` 매핑**: `token` 컬럼이 `UUID NOT NULL`이므로, UUID 형식이 아닌 토큰 리터럴(예: 공유 컨트랙트 테스트의 `'wrong-token'`)은 SQL 파싱 단계에서 Postgres 에러 코드 `22P02`(`invalid_text_representation`)로 거부된다. 이는 의미상 **CAS 미스와 동치**다 — UUID가 될 수 없는 토큰은 어떤 행과도 일치할 수 없기 때문. TS 어댑터는 쿼리를 `try/catch`로 감싸 `22P02`를 잡아 곧장 `'stale'`을 반환하여, `UUID` 타입 보장(저장 시 형식 검증)을 약화시키지 않으면서 컨트랙트의 wrong-token 의미를 그대로 보존한다.
+**구현 노트 — `22P02` 매핑**: `token` 컬럼이 `UUID NOT NULL`이므로, UUID 형식이 아닌 토큰 리터럴(예: 공유 컨트랙트 테스트의 `'wrong-token'`)은 SQL 파싱 단계에서 Postgres 에러 코드 `22P02`(`invalid_text_representation`)로 거부된다. 이는 의미상 **CAS 미스와 동치**다 — UUID가 될 수 없는 토큰은 어떤 행과도 일치할 수 없기 때문. TS 어댑터는 쿼리를 `try/catch`로 감싸 `22P02`를 잡아 곧장 `'stale'`을 반환하여, `UUID` 타입 보장(저장 시 형식 검증)을 약화시키지 않으면서 컨트랙트의 wrong-token 의미를 그대로 보존한다. 이 catch는 **오직 형식이 잘못된(non-UUID-shaped) 토큰 리터럴**만을 처리한다. **유효한 UUID 형식이지만 저장된 토큰과 일치하지 않는** 토큰은 예외를 발생시키지 않고 표준 `rowCount === 0` 경로로 흘러 `'stale'`을 반환한다.
 
 ### 4.4 `delete(key, token)`
 
@@ -205,7 +205,7 @@ async delete(key: string, token: string): Promise<MutateResult> {
 }
 ```
 
-**구현 노트 — `22P02` 매핑**: `complete()`와 마찬가지로, `token UUID NOT NULL` 컬럼은 UUID가 아닌 토큰 리터럴(예: 컨트랙트 테스트의 `'wrong-token'`)을 `22P02`로 거부한다. 어댑터는 DELETE를 `try/catch`로 감싸 `22P02`를 잡고 **존재 확인 SELECT로 폴스루**한다. 의미적으로 옳다 — UUID가 될 수 없는 토큰은 어떤 행도 소유할 수 없으므로, 행이 존재하면 호출자가 stale이고 존재하지 않으면 멱등 정리(`'ok'`)다. 결과적으로 "missing key → ok / wrong token → stale" 컨트랙트 의미를 `UUID` 컬럼 타입 보장을 깨뜨리지 않고 그대로 유지한다.
+**구현 노트 — `22P02` 매핑**: `complete()`와 마찬가지로, `token UUID NOT NULL` 컬럼은 UUID가 아닌 토큰 리터럴(예: 컨트랙트 테스트의 `'wrong-token'`)을 `22P02`로 거부한다. 어댑터는 DELETE를 `try/catch`로 감싸 `22P02`를 잡고 **존재 확인 SELECT로 폴스루**한다. 의미적으로 옳다 — UUID가 될 수 없는 토큰은 어떤 행도 소유할 수 없으므로, 행이 존재하면 호출자가 stale이고 존재하지 않으면 멱등 정리(`'ok'`)다. 결과적으로 "missing key → ok / wrong token → stale" 컨트랙트 의미를 `UUID` 컬럼 타입 보장을 깨뜨리지 않고 그대로 유지한다. 이 catch는 **오직 형식이 잘못된(non-UUID-shaped) 토큰 리터럴**만을 처리한다. **유효한 UUID 형식이지만 저장된 토큰과 일치하지 않는** 토큰은 예외 없이 표준 `rowCount === 0` 경로(DELETE는 0 행 영향, 이후 존재 확인 SELECT)로 처리된다.
 
 **대안 검토 (단일 쿼리화)**:
 ```sql
