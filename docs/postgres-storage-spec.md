@@ -266,8 +266,8 @@ export interface PostgresStorageOptions {
   /** 테스트용 시임. */
   poolFactory?: (config: PoolConfig) => Pool;
 
-  /** 테이블 명 prefix. 멀티 테넌트 격리용 (선택). 기본 없음. */
-  tablePrefix?: string;
+  /** 테이블 명. 멀티 테넌트 격리용 (선택). 기본 'idempotency_records'. */
+  tableName?: string;
 
   /** 모듈 init 시 CREATE TABLE IF NOT EXISTS 실행. 기본 false. */
   autoCreateSchema?: boolean;
@@ -421,9 +421,9 @@ IdempotencyModule.forRoot({
 
 `onModuleInit`에서 `createSchema()` 호출. **개발 환경에서만 권장**. 프로덕션은 명시적 마이그레이션 권장 (DDL 권한 필요, 부팅 시 경쟁 가능).
 
-`tablePrefix` 옵션과 결합 시:
+`tableName` 옵션과 결합 시:
 ```sql
-CREATE TABLE IF NOT EXISTS "${prefix}_idempotency_records" (...);
+CREATE TABLE IF NOT EXISTS "${tableName}" (...);
 ```
 
 ### 7.4 비교표
@@ -549,7 +549,7 @@ describe('PostgresStorage — shared contract', () => {
 | `pool` 모드 lifecycle | 사용자 pool은 `onModuleDestroy()`에서 `end()` 안 됨 |
 | `connection` 모드 lifecycle | 자체 생성 pool은 `end()` 됨 |
 | `autoCreateSchema=true` | 모듈 init 시 테이블이 없으면 생성, 있으면 무동작 |
-| `tablePrefix` | 다른 prefix는 격리 (같은 키도 충돌 없음) |
+| `tableName` | 다른 테이블 명은 격리 (같은 키도 충돌 없음) |
 | `createSchema()` 멱등성 | 여러 번 호출해도 에러 없음 |
 
 ### 10.3 Sweep 서비스 테스트
@@ -705,7 +705,7 @@ README에 "Postgres 12+ 권장 (16에서 검증, 9.5+ 호환 가능성 있음)" 
 | 7 | `PostgresStorage.delete()` 구현 (GREEN) | delete 관련 테스트 통과 |
 | 8 | `OnModuleDestroy`, `close()`, ownsPool 분기 | 라이프사이클 테스트 통과 |
 | 9 | `createSchema()` 정적 메서드 + `autoCreateSchema` | 마이그레이션 테스트 통과 |
-| 10 | `tablePrefix` 옵션 | prefix 격리 테스트 통과 |
+| 10 | `tableName` 옵션 | 테이블 명 격리 테스트 통과 |
 | 11 | `PostgresSweepService` 구현 + 테스트 | sweep 테스트 통과 |
 | 12 | `src/index.ts` 재내보내기 | 공개 API 노출 |
 | 13 | E2E 테스트 (`test/e2e/postgres.e2e-spec.ts`) | 실제 NestJS 앱 검증 |

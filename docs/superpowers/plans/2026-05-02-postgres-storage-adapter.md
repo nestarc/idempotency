@@ -235,7 +235,6 @@ Write `src/storage/postgres.storage.ts`:
 
 ```typescript
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
-import { randomUUID } from 'crypto';
 import type { Pool, PoolConfig } from 'pg';
 
 import type {
@@ -325,28 +324,28 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
     }
   }
 
-  async get(key: string): Promise<IdempotencyRecord | null> {
+  async get(_key: string): Promise<IdempotencyRecord | null> {
     throw new Error('not implemented');
   }
 
   async create(
-    key: string,
-    fingerprint: string | undefined,
-    ttlSeconds: number,
+    _key: string,
+    _fingerprint: string | undefined,
+    _ttlSeconds: number,
   ): Promise<CreateResult> {
     throw new Error('not implemented');
   }
 
   async complete(
-    key: string,
-    token: string,
-    response: CompleteResponse,
-    ttlSeconds: number,
+    _key: string,
+    _token: string,
+    _response: CompleteResponse,
+    _ttlSeconds: number,
   ): Promise<MutateResult> {
     throw new Error('not implemented');
   }
 
-  async delete(key: string, token: string): Promise<MutateResult> {
+  async delete(_key: string, _token: string): Promise<MutateResult> {
     throw new Error('not implemented');
   }
 
@@ -515,6 +514,8 @@ unaffected."
 
 - [ ] **Step 1: Replace the `get()` body with a real implementation**
 
+When replacing the `get()` body, rename the parameter from `_key` to `key` (the skeleton uses an underscore prefix to satisfy `noUnusedParameters`).
+
 Replace the `async get(key)` method body:
 
 ```typescript
@@ -574,6 +575,8 @@ records that should be gone — even before any active sweep runs."
 
 - [ ] **Step 1: Replace the `create()` body**
 
+When replacing the `create()` body, you must (a) add `import { randomUUID } from 'crypto';` to the imports at the top of the file, and (b) rename parameters `_key`, `_fingerprint`, `_ttlSeconds` to `key`, `fingerprint`, `ttlSeconds` in the signature.
+
 Replace the `async create(...)` method body:
 
 ```typescript
@@ -632,6 +635,8 @@ conflicts from successful (re)acquisitions."
 
 - [ ] **Step 1: Replace the `complete()` body**
 
+When replacing the `complete()` body, rename the parameters from `_key`, `_token`, `_response`, `_ttlSeconds` to `key`, `token`, `response`, `ttlSeconds`.
+
 Replace the `async complete(...)` method body:
 
 ```typescript
@@ -680,6 +685,8 @@ keeps the original timestamp untouched. Defensive AND status =
 - Modify: `src/storage/postgres.storage.ts`
 
 - [ ] **Step 1: Replace the `delete()` body**
+
+When replacing the `delete()` body, rename the parameters from `_key`, `_token` to `key`, `token`.
 
 Replace the `async delete(...)` method body:
 
