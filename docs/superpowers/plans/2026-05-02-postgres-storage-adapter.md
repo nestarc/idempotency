@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
   expires_at     TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_idempotency_expires_at
+CREATE INDEX IF NOT EXISTS idx_idempotency_records_expires_at
   ON idempotency_records (expires_at);
 ```
 
