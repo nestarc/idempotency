@@ -11,3 +11,4 @@ tsconfig.json
 tsconfig.build.json
 .gitignore
 .git/
+docker-compose.yml
