@@ -88,8 +88,35 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
     }
   }
 
-  async get(_key: string): Promise<IdempotencyRecord | null> {
-    throw new Error('not implemented');
+  async get(key: string): Promise<IdempotencyRecord | null> {
+    const result = await this.pool.query<{
+      key: string;
+      token: string;
+      fingerprint: string | null;
+      status: 'PROCESSING' | 'COMPLETED';
+      response_code: number | null;
+      response_body: string | null;
+      created_at: Date;
+      expires_at: Date;
+    }>(
+      `SELECT key, token, fingerprint, status, response_code, response_body,
+              created_at, expires_at
+         FROM ${quoteIdent(this.tableName)}
+         WHERE key = $1 AND expires_at > now()`,
+      [key],
+    );
+    if (result.rowCount === 0) return null;
+    const row = result.rows[0];
+    return {
+      key: row.key,
+      token: row.token,
+      fingerprint: row.fingerprint ?? undefined,
+      status: row.status,
+      statusCode: row.response_code ?? undefined,
+      responseBody: row.response_body ?? undefined,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+    };
   }
 
   async create(
