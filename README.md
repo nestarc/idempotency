@@ -1,6 +1,6 @@
 # @nestarc/idempotency
 
-> IETF-draft-compliant idempotency module for NestJS — decorator-based, pluggable storage (memory/Redis), response replay, fingerprint validation.
+> IETF-draft-compliant idempotency module for NestJS — decorator-based, pluggable storage (memory/Redis/Postgres), response replay, fingerprint validation.
 
 [![CI](https://github.com/nestarc/idempotency/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nestarc/idempotency/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@nestarc/idempotency.svg)](https://www.npmjs.com/package/@nestarc/idempotency)
@@ -32,6 +32,12 @@ If you plan to use the Redis storage adapter, also install `ioredis`:
 
 ```bash
 npm install ioredis
+```
+
+If you plan to use the PostgreSQL storage adapter, also install `pg`:
+
+```bash
+npm install pg
 ```
 
 ## Quick start
@@ -149,6 +155,86 @@ import { Redis } from 'ioredis';
 export class AppModule {}
 ```
 
+## PostgreSQL storage
+
+If your stack already runs Postgres, you can avoid adding Redis just for
+idempotency. The Postgres adapter ships with the same atomic-NX +
+token-CAS guarantees as Redis, with lazy expiration on `get()` and an
+optional sweep service for active cleanup.
+
+```ts
+import { Module } from '@nestjs/common';
+import { Pool } from 'pg';
+import { IdempotencyModule, PostgresStorage } from '@nestarc/idempotency';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+@Module({
+  imports: [
+    IdempotencyModule.forRoot({
+      storage: new PostgresStorage({ pool }),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+### Schema migration
+
+Three options, pick whichever fits your tooling:
+
+1. **SQL file (recommended for production):**
+   ```bash
+   psql "$DATABASE_URL" -f node_modules/@nestarc/idempotency/sql/init.sql
+   ```
+2. **Code helper (good for tests / scripts):**
+   ```ts
+   import { PostgresStorage } from '@nestarc/idempotency';
+   await PostgresStorage.createSchema(pool);
+   ```
+3. **Auto on module init (development only):**
+   ```ts
+   new PostgresStorage({ pool, autoCreateSchema: true })
+   ```
+
+### Optional sweep service
+
+Lazy expiration on `get()` already guarantees correctness. The sweep
+service exists only to bound disk usage in long-running deployments:
+
+```ts
+import {
+  IdempotencyModule,
+  PostgresStorage,
+  PostgresSweepService,
+  IDEMPOTENCY_SWEEP_OPTIONS,
+} from '@nestarc/idempotency';
+
+@Module({
+  imports: [
+    IdempotencyModule.forRoot({ storage: new PostgresStorage({ pool }) }),
+  ],
+  providers: [
+    PostgresSweepService,
+    {
+      provide: IDEMPOTENCY_SWEEP_OPTIONS,
+      useValue: { enabled: true, intervalMs: 60_000 },
+    },
+  ],
+})
+export class AppModule {}
+```
+
+Or schedule it externally with `pg_cron`:
+
+```sql
+SELECT cron.schedule('idempotency-sweep', '* * * * *',
+  $$DELETE FROM idempotency_records WHERE expires_at < now()$$);
+```
+
+> Multi-replica safe: each sweep wraps the DELETE in
+> `pg_try_advisory_lock` so only one replica per cycle does the work.
+
 ## Configuration reference
 
 ### Module options (`IdempotencyModule.forRoot(...)`)
@@ -248,14 +334,14 @@ Note that v0.1.3+ returns a **replay** (not a 409) when the race winner has alre
 
 ## Storage adapters
 
-| Feature                | `MemoryStorage`              | `RedisStorage`                          |
-| ---------------------- | ---------------------------- | --------------------------------------- |
-| Scope                  | single process               | shared across replicas                  |
-| Persistence            | none (lost on restart)       | full Redis durability                   |
-| TTL mechanism          | `setTimeout`                 | Redis `EXPIRE`                          |
-| Cluster-safe           | ❌                           | ✅                                      |
-| Production-ready       | ❌ (dev/test only)           | ✅                                      |
-| Required peer          | none                         | `ioredis ^5`                            |
+| Feature                | `MemoryStorage`              | `RedisStorage`                          | `PostgresStorage`                              |
+| ---------------------- | ---------------------------- | --------------------------------------- | ---------------------------------------------- |
+| Scope                  | single process               | shared across replicas                  | shared across replicas                         |
+| Persistence            | none (lost on restart)       | full Redis durability                   | full Postgres durability                       |
+| TTL mechanism          | `setTimeout`                 | Redis `EXPIRE`                          | lazy on `get()` + optional sweep service       |
+| Cluster-safe           | ❌                           | ✅                                      | ✅                                             |
+| Production-ready       | ❌ (dev/test only)           | ✅                                      | ✅                                             |
+| Required peer          | none                         | `ioredis ^5`                            | `pg ^8.11`                                     |
 
 ### Custom storage adapters
 
@@ -336,11 +422,10 @@ This package targets [`draft-ietf-httpapi-idempotency-key-header-07`](https://da
 
 Deferred to future versions:
 
-- 🚧 Response header replay (v0.2)
-- 🚧 PostgreSQL storage adapter (v0.2)
-- 🚧 Fastify adapter verification (v0.2)
-- 🚧 Stable JSON stringify for fingerprint (v0.2)
-- 🚧 Dual ESM/CJS build (v0.2)
+- 🚧 Response header replay (v0.3)
+- 🚧 Fastify adapter verification (v0.3)
+- 🚧 Stable JSON stringify for fingerprint (v0.3)
+- 🚧 Dual ESM/CJS build (v0.3)
 
 ## Caveats (v0.1)
 
@@ -352,8 +437,9 @@ Deferred to future versions:
 
 ## Roadmap
 
-- v0.2: PostgreSQL storage adapter (Prisma), response header replay, Fastify verification, dual ESM/CJS build, stable stringify
-- v0.3: Custom fingerprint functions, metrics (hit rate, conflict rate), business-error caching option, Swagger/OpenAPI integration
+- v0.2 (shipped): PostgreSQL storage adapter (`pg`), opt-in sweep service, bundled SQL DDL
+- v0.3: Transactional integration (`@TransactionalIdempotent`), response header replay, Fastify verification, dual ESM/CJS build, stable stringify, multi-Postgres-major CI matrix
+- v0.4: Custom fingerprint functions, metrics (hit rate, conflict rate), business-error caching option, Swagger/OpenAPI integration
 
 ## License
 

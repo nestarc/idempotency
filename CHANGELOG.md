@@ -4,6 +4,22 @@ All notable changes to `@nestarc/idempotency` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-03
+
+### Added
+- `PostgresStorage` — third built-in `IdempotencyStorage` adapter for Postgres.
+  Atomic NX via `INSERT ... ON CONFLICT DO UPDATE WHERE expires_at < now()`,
+  token-based CAS on `complete()` / `delete()`, lazy expiration on `get()`.
+  `pg ^8.11.0` is an optional peer dependency.
+- `PostgresSweepService` — opt-in active cleanup of expired records.
+  Multi-replica safe via `pg_try_advisory_lock`.
+- Bundled SQL DDL at `sql/init.sql` for migration tooling, plus a
+  `PostgresStorage.createSchema()` code helper and an `autoCreateSchema`
+  module-init option for development.
+- CI service container for Postgres 16; full unit, e2e, and v0.1.3
+  regression parity is now run against PostgresStorage.
+- Benchmark scenarios F (first request) and G (replay) for Postgres.
+
 ## [0.1.3] — 2026-04-09
 
 Correctness pass addressing four findings from a cross-review. All four

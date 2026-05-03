@@ -263,8 +263,16 @@ interface IdempotencyStorage {
 - [x] TTL 설정 (글로벌 + 엔드포인트별 오버라이드)
 - [x] README + 기본 예제
 
-### v0.2.0 이후
-- [ ] PostgreSQL 스토리지 어댑터 (Prisma)
+### v0.2.0 (출시 완료)
+- [x] PostgreSQL 스토리지 어댑터 (`pg` peer dependency, Prisma 비의존)
+- [x] `PostgresSweepService` — opt-in 만료 레코드 정리 (`pg_try_advisory_lock` 기반 멀티-레플리카 세이프)
+- [x] 번들 SQL DDL (`sql/init.sql`) + `PostgresStorage.createSchema()` 코드 헬퍼 + `autoCreateSchema` 모듈 옵션
+- [x] CI Postgres 16 서비스 컨테이너 + v0.1.3 회귀 테스트 패리티
+
+### v0.3.0 이후
+- [ ] Transactional integration (`@TransactionalIdempotent`) — 비즈니스 INSERT와 idempotency complete를 하나의 DB 트랜잭션으로 묶기
+- [ ] 멀티-Postgres 메이저 CI 매트릭스 (12, 14, 16, 17)
+- [ ] Optional JSONB body storage (쿼리 가능한 응답 검사)
 - [ ] 응답 헤더 저장/리플레이
 - [ ] `@nestarc/tenancy` 연동 (테넌트별 키 격리)
 - [ ] Swagger/OpenAPI 데코레이터 자동 적용
@@ -402,3 +410,17 @@ export function Idempotent(options?: IdempotentOptions): MethodDecorator {
 ---
 
 *이 문서는 2026-04-09 nestarc.dev 생태계 확장 리서치 세션에서 작성되었으며, Claude Code 또는 다른 세션에서 구현을 이어갈 때 컨텍스트로 활용한다.*
+
+---
+
+## v0.2.0 — PostgreSQL storage adapter (shipped)
+
+Adds `PostgresStorage` and `PostgresSweepService`. Full design:
+[postgres-storage-spec.md](./postgres-storage-spec.md). Implementation
+plan: [superpowers/plans/2026-05-02-postgres-storage-adapter.md](./superpowers/plans/2026-05-02-postgres-storage-adapter.md).
+
+Future work tracked for v0.3.0:
+- Transactional integration (`@TransactionalIdempotent`) so business
+  inserts and idempotency completion share one DB transaction.
+- Multi-Postgres-major CI matrix (12, 14, 16, 17).
+- Optional JSONB body storage for query-friendly inspection.
