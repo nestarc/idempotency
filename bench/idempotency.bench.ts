@@ -7,11 +7,15 @@
  *   C) Replay — MemoryStorage
  *   D) First request — RedisStorage
  *   E) Replay — RedisStorage
+ *   F) First request — PostgresStorage
+ *   G) Replay — PostgresStorage
  *
  * Usage:
  *   npx ts-node bench/idempotency.bench.ts
  *   npx ts-node bench/idempotency.bench.ts --iterations 500
  *   npx ts-node bench/idempotency.bench.ts --redis-url redis://localhost:6379
+ *   npx ts-node bench/idempotency.bench.ts --postgres-url postgresql://user:pass@localhost:5432/db
+ *   TEST_DATABASE_URL=... npx ts-node bench/idempotency.bench.ts
  */
 import 'reflect-metadata';
 import {
@@ -41,6 +45,7 @@ function flag(name: string, fallback: string): string {
 const ITERATIONS = Number(flag('iterations', '200'));
 const WARMUP = Number(flag('warmup', '20'));
 const REDIS_URL = flag('redis-url', '');
+const POSTGRES_URL = flag('postgres-url', '') || process.env.TEST_DATABASE_URL || '';
 
 // Unique run ID ensures keys never collide across repeated executions
 // (Redis TTL is 86400s — without this, a second run replays cached
@@ -248,6 +253,52 @@ async function main() {
       '\n  [skip] No --redis-url provided — skipping Redis benchmarks (D, E)',
     );
     console.log('         Run with: npx ts-node bench/idempotency.bench.ts --redis-url redis://localhost:6379\n');
+  }
+
+  // ── Postgres Storage scenarios (optional) ───────────────────────
+  if (POSTGRES_URL) {
+    let PostgresStorageCtor: typeof import('../src/storage/postgres.storage').PostgresStorage;
+    let PgPool: typeof import('pg').Pool;
+    try {
+      PgPool = (await import('pg')).Pool;
+      PostgresStorageCtor = (await import('../src/storage/postgres.storage')).PostgresStorage;
+    } catch {
+      console.log('\n  [skip] pg not available — skipping Postgres benchmarks\n');
+      return;
+    }
+
+    const pool = new PgPool({ connectionString: POSTGRES_URL });
+    await PostgresStorageCtor.createSchema(pool);
+    await pool.query('TRUNCATE idempotency_records');
+    const pgStorage = new PostgresStorageCtor({ pool });
+    const pgApp = await createApp(pgStorage);
+    const pgServer = pgApp.getHttpServer() as http.Server;
+
+    // F) First request — PostgresStorage
+    await measure('F) First request — PostgresStorage', async (i) => {
+      await postJSON(pgServer, '/idempotent', requestBody, {
+        'Idempotency-Key': `${RUN_ID}-first-pg-${i}`,
+      });
+    });
+
+    // G) Replay — PostgresStorage
+    const replayPgKey = `${RUN_ID}-replay-pg`;
+    await postJSON(pgServer, '/idempotent', requestBody, {
+      'Idempotency-Key': replayPgKey,
+    });
+    await measure('G) Replay — PostgresStorage', async () => {
+      await postJSON(pgServer, '/idempotent', requestBody, {
+        'Idempotency-Key': replayPgKey,
+      });
+    });
+
+    await pgApp.close();
+    await pool.end();
+  } else {
+    console.log(
+      '\n  [skip] No --postgres-url or TEST_DATABASE_URL provided — skipping Postgres benchmarks (F, G)',
+    );
+    console.log('         Run with: npx ts-node bench/idempotency.bench.ts --postgres-url postgresql://user:pass@localhost:5432/db\n');
   }
 
   console.log('Done.\n');
