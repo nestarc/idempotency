@@ -1568,21 +1568,26 @@ describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
   });
 
   it('NX semantics under concurrent creation: exactly one wins', async () => {
-    const results = await Promise.all([
-      storage.create('cc', 'fp1', 60),
-      storage.create('cc', 'fp2', 60),
-      storage.create('cc', 'fp3', 60),
-      storage.create('cc', 'fp4', 60),
-      storage.create('cc', 'fp5', 60),
-    ]);
+    const fps = ['fp1', 'fp2', 'fp3', 'fp4', 'fp5'];
+    const results = await Promise.all(
+      fps.map((fp) => storage.create('cc', fp, 60)),
+    );
 
     const winners = results.filter((r) => r.acquired);
     const losers = results.filter((r) => !r.acquired);
     expect(winners).toHaveLength(1);
     expect(losers).toHaveLength(4);
+    // Tightened: losers must NOT carry a token (interface contract).
+    losers.forEach((r) => expect(r.token).toBeUndefined());
 
+    // The stored row's token AND fingerprint must match the same winning
+    // call. Without the fingerprint check, an adapter regression that
+    // recorded the right token alongside a different call's fingerprint
+    // would pass — this assertion locks down end-to-end consistency.
+    const winnerIdx = results.findIndex((r) => r.acquired);
     const row = await storage.get('cc');
     expect(row!.token).toBe(winners[0].token);
+    expect(row!.fingerprint).toBe(fps[winnerIdx]);
   });
 });
 ```
