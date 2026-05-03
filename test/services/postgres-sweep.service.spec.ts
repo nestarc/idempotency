@@ -69,10 +69,10 @@ describeOrSkip('PostgresSweepService', () => {
   it('disabled service does NOT schedule a timer on init', async () => {
     const svc = buildService({ enabled: false });
     await svc.onModuleInit();
-    // Internal timer should be unset; tearing down should be a no-op.
+    // Direct introspection: the internal timer field must be undefined.
+    expect((svc as unknown as { timer: NodeJS.Timeout | undefined }).timer).toBeUndefined();
     await svc.onModuleDestroy();
-    // No assertion error means we did not schedule. Sweep can still be
-    // called manually:
+    // Manual sweep should still work even when scheduling is disabled.
     const result = await svc.sweep();
     expect(result.deleted).toBe(0);
   });
@@ -82,10 +82,15 @@ describeOrSkip('PostgresSweepService', () => {
     try {
       const svc = buildService({ intervalMs: 1000 });
       await svc.onModuleInit();
+      const internal = svc as unknown as { timer?: NodeJS.Timeout };
+      expect(internal.timer).toBeDefined();
+
       await svc.onModuleDestroy();
-      // After destroy, advancing time should not trigger sweep.
+      // Advancing time after destroy must not trigger sweep. The timer
+      // reference is left intact (we just clearInterval'd it), so we
+      // verify quiescence via Jest's pending-timer count semantics.
       jest.advanceTimersByTime(5000);
-      // Nothing to assert directly — absence of unhandled rejections is enough.
+      expect(jest.getTimerCount()).toBe(0);
     } finally {
       jest.useRealTimers();
     }

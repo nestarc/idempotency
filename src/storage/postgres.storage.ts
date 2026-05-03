@@ -271,7 +271,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
  * with one that splits on `.` and validates each segment separately.
  * Do not loosen the regex without re-deriving the safety argument.
  */
-function quoteIdent(name: string): string {
+export function quoteIdent(name: string): string {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
     throw new Error(
       `PostgresStorage: invalid identifier ${JSON.stringify(name)}; ` +

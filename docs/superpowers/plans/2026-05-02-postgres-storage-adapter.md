@@ -410,8 +410,11 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
  * Quotes a Postgres identifier safely. We allow `tableName` to be a
  * user-provided string, so we must defend against injection. Postgres
  * doubles internal double-quotes inside `"..."`.
+ *
+ * Exported because `PostgresSweepService` (Task 12) reuses this single
+ * canonical helper instead of inlining a less-strict variant.
  */
-function quoteIdent(name: string): string {
+export function quoteIdent(name: string): string {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
     throw new Error(
       `PostgresStorage: invalid identifier ${JSON.stringify(name)}; ` +
@@ -1005,6 +1008,12 @@ tableName quoting."
 **Files:**
 - Create: `src/services/postgres-sweep.service.ts`
 - Create: `test/services/postgres-sweep.service.spec.ts`
+- Modify: `src/idempotency.constants.ts`
+
+Adds `IDEMPOTENCY_SWEEP_OPTIONS = Symbol(...)` to `src/idempotency.constants.ts`
+alongside the existing `IDEMPOTENCY_OPTIONS` and `IDEMPOTENCY_STORAGE` Symbols.
+Symbol tokens are collision-free across module boundaries; string tokens
+silently resolve to whichever provider was registered first.
 
 - [ ] **Step 1: Create the test first (RED)**
 
@@ -1082,10 +1091,10 @@ describeOrSkip('PostgresSweepService', () => {
   it('disabled service does NOT schedule a timer on init', async () => {
     const svc = buildService({ enabled: false });
     await svc.onModuleInit();
-    // Internal timer should be unset; tearing down should be a no-op.
+    // Direct introspection: the internal timer field must be undefined.
+    expect((svc as unknown as { timer: NodeJS.Timeout | undefined }).timer).toBeUndefined();
     await svc.onModuleDestroy();
-    // No assertion error means we did not schedule. Sweep can still be
-    // called manually:
+    // Manual sweep should still work even when scheduling is disabled.
     const result = await svc.sweep();
     expect(result.deleted).toBe(0);
   });
@@ -1095,10 +1104,15 @@ describeOrSkip('PostgresSweepService', () => {
     try {
       const svc = buildService({ intervalMs: 1000 });
       await svc.onModuleInit();
+      const internal = svc as unknown as { timer?: NodeJS.Timeout };
+      expect(internal.timer).toBeDefined();
+
       await svc.onModuleDestroy();
-      // After destroy, advancing time should not trigger sweep.
+      // Advancing time after destroy must not trigger sweep. The timer
+      // reference is left intact (we just clearInterval'd it), so we
+      // verify quiescence via Jest's pending-timer count semantics.
       jest.advanceTimersByTime(5000);
-      // Nothing to assert directly — absence of unhandled rejections is enough.
+      expect(jest.getTimerCount()).toBe(0);
     } finally {
       jest.useRealTimers();
     }
@@ -1125,7 +1139,8 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 
-import { PostgresStorage } from '../storage/postgres.storage';
+import { IDEMPOTENCY_SWEEP_OPTIONS } from '../idempotency.constants';
+import { PostgresStorage, quoteIdent } from '../storage/postgres.storage';
 
 export interface SweepOptions {
   /** When false, the service is wired up but never schedules a sweep. */
@@ -1155,7 +1170,7 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly storage: PostgresStorage,
     @Optional()
-    @Inject('IDEMPOTENCY_SWEEP_OPTIONS')
+    @Inject(IDEMPOTENCY_SWEEP_OPTIONS)
     private readonly options: SweepOptions = { enabled: false },
   ) {}
 
@@ -1179,12 +1194,9 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
    * replica holds the advisory lock for this cycle).
    */
   async sweep(): Promise<{ deleted: number }> {
-    // Public access required: the sweep service needs the underlying pool to
-    // run a multi-statement query atomically through one connection so the
-    // advisory lock and DELETE share session state.
-    const pool = (this.storage as unknown as { pool: import('pg').Pool }).pool;
-    const tableName = (this.storage as unknown as { tableName: string }).tableName;
-    const ident = `"${tableName.replace(/"/g, '""')}"`;
+    const pool = this.storage.pool;
+    const tableName = this.storage.tableName;
+    const ident = quoteIdent(tableName);
 
     const client = await pool.connect();
     try {
@@ -1212,7 +1224,7 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
 }
 ```
 
-- [ ] **Step 4: Expose `pool` and `tableName` to the sweep service safely**
+- [ ] **Step 4: Expose `pool` and `tableName` to the sweep service safely; export `quoteIdent` for reuse**
 
 Modify `src/storage/postgres.storage.ts` — change the field visibility from `private readonly` to `readonly` (package-internal) for `pool` and `tableName`:
 
@@ -1231,12 +1243,14 @@ with:
   private readonly autoCreateSchema: boolean;
 ```
 
-Then simplify the sweep service — remove the unsafe casts. Replace the cast block in `sweep()`:
+Also promote the existing module-level `quoteIdent(name)` helper from `function quoteIdent(...)` to `export function quoteIdent(...)`. The sweep service reuses this single canonical helper instead of inlining a less-strict variant — keeping the identifier-shape regex and double-quote escape in one place.
+
+The sweep service in Step 3 already imports and calls `quoteIdent` directly, so no additional edits are needed in the service file once `quoteIdent` is exported. The body of `sweep()` reads as:
 
 ```typescript
 const pool = this.storage.pool;
 const tableName = this.storage.tableName;
-const ident = `"${tableName.replace(/"/g, '""')}"`;
+const ident = quoteIdent(tableName);
 ```
 
 - [ ] **Step 5: Run sweep tests**
@@ -1803,6 +1817,7 @@ service exists only to bound disk usage in long-running deployments:
 
 ```ts
 import {
+  IDEMPOTENCY_SWEEP_OPTIONS,
   IdempotencyModule,
   PostgresStorage,
   PostgresSweepService,
@@ -1815,7 +1830,7 @@ import {
   providers: [
     PostgresSweepService,
     {
-      provide: 'IDEMPOTENCY_SWEEP_OPTIONS',
+      provide: IDEMPOTENCY_SWEEP_OPTIONS,
       useValue: { enabled: true, intervalMs: 60_000 },
     },
   ],

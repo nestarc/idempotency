@@ -7,7 +7,8 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 
-import { PostgresStorage } from '../storage/postgres.storage';
+import { IDEMPOTENCY_SWEEP_OPTIONS } from '../idempotency.constants';
+import { PostgresStorage, quoteIdent } from '../storage/postgres.storage';
 
 export interface SweepOptions {
   /** When false, the service is wired up but never schedules a sweep. */
@@ -37,7 +38,7 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly storage: PostgresStorage,
     @Optional()
-    @Inject('IDEMPOTENCY_SWEEP_OPTIONS')
+    @Inject(IDEMPOTENCY_SWEEP_OPTIONS)
     private readonly options: SweepOptions = { enabled: false },
   ) {}
 
@@ -63,7 +64,7 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
   async sweep(): Promise<{ deleted: number }> {
     const pool = this.storage.pool;
     const tableName = this.storage.tableName;
-    const ident = `"${tableName.replace(/"/g, '""')}"`;
+    const ident = quoteIdent(tableName);
 
     const client = await pool.connect();
     try {

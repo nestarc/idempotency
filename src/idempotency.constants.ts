@@ -9,6 +9,12 @@ export const IDEMPOTENCY_OPTIONS = Symbol('IDEMPOTENCY_OPTIONS');
 export const IDEMPOTENCY_STORAGE = Symbol('IDEMPOTENCY_STORAGE');
 
 /**
+ * Injection token for {@link SweepOptions}. Optional — when not provided the
+ * `PostgresSweepService` runs in disabled mode (no scheduled cleanup).
+ */
+export const IDEMPOTENCY_SWEEP_OPTIONS = Symbol('IDEMPOTENCY_SWEEP_OPTIONS');
+
+/**
  * Reflector metadata key carrying the per-handler {@link IdempotentMetadata}.
  *
  * Stored as a plain string (not Symbol) for maximum compatibility with
