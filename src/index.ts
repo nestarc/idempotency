@@ -6,11 +6,22 @@ export { Idempotent } from './idempotency.decorator';
 // Storage adapters
 export { MemoryStorage } from './storage/memory.storage';
 export { RedisStorage, type RedisStorageOptions } from './storage/redis.storage';
+export {
+  PostgresStorage,
+  type PostgresStorageOptions,
+} from './storage/postgres.storage';
+
+// Optional services
+export {
+  PostgresSweepService,
+  type SweepOptions,
+} from './services/postgres-sweep.service';
 
 // Constants (injection tokens, metadata key, defaults)
 export {
   IDEMPOTENCY_OPTIONS,
   IDEMPOTENCY_STORAGE,
+  IDEMPOTENCY_SWEEP_OPTIONS,
   IDEMPOTENT_METADATA_KEY,
   DEFAULT_HEADER_NAME,
   DEFAULT_TTL_SECONDS,
