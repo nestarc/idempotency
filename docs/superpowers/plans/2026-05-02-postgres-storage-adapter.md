@@ -1333,16 +1333,18 @@ Expected: pattern using `Test.createTestingModule`, `supertest`, controller fixt
 
 - [ ] **Step 2: Create the Postgres e2e**
 
-Write `test/e2e/postgres.e2e-spec.ts`:
+Write `test/e2e/postgres.e2e-spec.ts`. Note: `IdempotencyModule.forRoot` is intentionally non-magic — consumers explicitly choose between `APP_INTERCEPTOR` (global), controller-scope, or method-scope registration. The e2e test uses `APP_INTERCEPTOR` for parity with the existing `test/e2e/idempotency.e2e-spec.ts` pattern; without this wiring the interceptor never fires and every test would fall through to the raw handler.
 
 ```typescript
 import 'reflect-metadata';
 import { INestApplication, Module, Controller, Post, Body } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { Pool } from 'pg';
 import request from 'supertest';
 
 import {
+  IdempotencyInterceptor,
   IdempotencyModule,
   Idempotent,
   PostgresStorage,
@@ -1387,6 +1389,9 @@ describeOrSkip('PostgresStorage e2e', () => {
         }),
       ],
       controllers: [PaymentsController],
+      providers: [
+        { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
+      ],
     })
     class AppModule {}
 
