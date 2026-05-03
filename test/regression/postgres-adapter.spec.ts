@@ -16,22 +16,27 @@ import { PostgresStorage } from '../../src/storage/postgres.storage';
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel; each PG spec
+// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
+const TABLE_NAME = 'idempotency_records_regression';
+
 describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
   let pool: Pool;
   let storage: PostgresStorage;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
-    storage = new PostgresStorage({ pool });
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
+    storage = new PostgresStorage({ pool, tableName: TABLE_NAME });
   });
 
   it('race-completed-winner: complete() after expired-replacement returns stale', async () => {
@@ -39,7 +44,7 @@ describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
 
     // Force the row to be expired so a fresh create() can replace it.
     await pool.query(
-      `UPDATE idempotency_records SET expires_at = now() - interval '1 second'
+      `UPDATE "${TABLE_NAME}" SET expires_at = now() - interval '1 second'
        WHERE key = 'rk'`,
     );
 

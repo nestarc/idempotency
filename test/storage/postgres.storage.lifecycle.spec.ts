@@ -17,6 +17,10 @@ import { IdempotencyModule } from '../../src/idempotency.module';
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = TEST_DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: every PG spec uses its own table so jest's
+// parallel test runner cannot cause TRUNCATEs to collide between specs.
+const TABLE_NAME = 'idempotency_records_lifecycle';
+
 describeOrSkip('PostgresStorage lifecycle', () => {
   it('closes the internally-owned pool via OnModuleDestroy when the Nest app shuts down', async () => {
     let factoryPool: Pool | undefined;
@@ -26,6 +30,7 @@ describeOrSkip('PostgresStorage lifecycle', () => {
         IdempotencyModule.forRoot({
           storage: new PostgresStorage({
             connection: { connectionString: TEST_DATABASE_URL },
+            tableName: TABLE_NAME,
             poolFactory: (cfg): Pool => {
               // eslint-disable-next-line @typescript-eslint/no-var-requires
               const PgPool = require('pg').Pool;
@@ -58,7 +63,7 @@ describeOrSkip('PostgresStorage lifecycle', () => {
     @Module({
       imports: [
         IdempotencyModule.forRoot({
-          storage: new PostgresStorage({ pool: consumerPool }),
+          storage: new PostgresStorage({ pool: consumerPool, tableName: TABLE_NAME }),
         }),
       ],
     })

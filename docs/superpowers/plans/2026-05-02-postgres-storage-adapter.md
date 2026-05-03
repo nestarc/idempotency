@@ -464,6 +464,11 @@ const DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel, so every PG
+// spec uses its own table to avoid TRUNCATEs colliding across files. See
+// Task 16 of the v0.2.0 plan for the rationale.
+const TABLE_NAME = 'idempotency_records_contract';
+
 if (!DATABASE_URL) {
   // eslint-disable-next-line no-console
   console.warn(
@@ -478,23 +483,24 @@ describeOrSkip('PostgresStorage', () => {
 
   beforeAll(async () => {
     suitePool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(suitePool);
+    await PostgresStorage.createSchema(suitePool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await suitePool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await suitePool.end();
   });
 
   describeStorageContract('PostgresStorage', async () => {
     // Per-test isolation: TRUNCATE before each test.
-    await suitePool.query('TRUNCATE idempotency_records');
-    const storage = new PostgresStorage({ pool: suitePool });
+    await suitePool.query(`TRUNCATE "${TABLE_NAME}"`);
+    const storage = new PostgresStorage({ pool: suitePool, tableName: TABLE_NAME });
     return {
       storage,
       cleanup: async () => {
         // Don't call storage.close() here — the consumer-supplied pool is
         // reused across tests. afterAll() ends it once at the end.
-        await suitePool.query('TRUNCATE idempotency_records');
+        await suitePool.query(`TRUNCATE "${TABLE_NAME}"`);
       },
     };
   });
@@ -806,6 +812,10 @@ import { IdempotencyModule } from '../../src/idempotency.module';
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = TEST_DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: every PG spec uses its own table so jest's
+// parallel test runner cannot cause TRUNCATEs to collide between specs.
+const TABLE_NAME = 'idempotency_records_lifecycle';
+
 describeOrSkip('PostgresStorage lifecycle', () => {
   it('closes the internally-owned pool via OnModuleDestroy when the Nest app shuts down', async () => {
     let factoryPool: Pool | undefined;
@@ -815,6 +825,7 @@ describeOrSkip('PostgresStorage lifecycle', () => {
         IdempotencyModule.forRoot({
           storage: new PostgresStorage({
             connection: { connectionString: TEST_DATABASE_URL },
+            tableName: TABLE_NAME,
             poolFactory: (cfg): Pool => {
               // eslint-disable-next-line @typescript-eslint/no-var-requires
               const PgPool = require('pg').Pool;
@@ -847,7 +858,7 @@ describeOrSkip('PostgresStorage lifecycle', () => {
     @Module({
       imports: [
         IdempotencyModule.forRoot({
-          storage: new PostgresStorage({ pool: consumerPool }),
+          storage: new PostgresStorage({ pool: consumerPool, tableName: TABLE_NAME }),
         }),
       ],
     })
@@ -898,23 +909,24 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
   });
 
   it('create() replaces an expired row with a fresh PROCESSING record', async () => {
-    const storage = new PostgresStorage({ pool });
+    const storage = new PostgresStorage({ pool, tableName: TABLE_NAME });
     // Seed a COMPLETED row with non-null statusCode/body so we can assert
     // they are cleared by the ON CONFLICT DO UPDATE branch.
     await pool.query(
-      `INSERT INTO idempotency_records
+      `INSERT INTO "${TABLE_NAME}"
          (key, token, fingerprint, status, response_code, response_body, expires_at)
        VALUES ('expired-key', gen_random_uuid(), 'old-fp', 'COMPLETED',
                200, '{"prior":"body"}', now() - interval '1 second')`,
@@ -934,8 +946,8 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
   });
 
   it('createSchema() is idempotent — calling twice does not throw', async () => {
-    await PostgresStorage.createSchema(pool);
-    await PostgresStorage.createSchema(pool); // would throw on duplicate without IF NOT EXISTS
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
+    await PostgresStorage.createSchema(pool, TABLE_NAME); // would throw on duplicate without IF NOT EXISTS
   });
 
   it('createSchema() rejects unsafe table names', async () => {
@@ -954,9 +966,9 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
       const row = await storage.get('alt-key');
       expect(row!.fingerprint).toBe('fp');
 
-      // Default table should be untouched.
+      // Suite's main table should be untouched.
       const main = await pool.query(
-        'SELECT count(*)::int AS c FROM idempotency_records WHERE key = $1',
+        `SELECT count(*)::int AS c FROM "${TABLE_NAME}" WHERE key = $1`,
         ['alt-key'],
       );
       expect(main.rows[0].c).toBe(0);
@@ -966,20 +978,25 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
   });
 
   it('autoCreateSchema=true creates the table on module init when missing', async () => {
-    // Drop the default table to simulate a fresh DB.
-    await pool.query('DROP TABLE IF EXISTS idempotency_records');
+    // Drop our suite-private table to simulate a fresh DB.
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     try {
-      const storage = new PostgresStorage({ pool, autoCreateSchema: true });
+      const storage = new PostgresStorage({
+        pool,
+        tableName: TABLE_NAME,
+        autoCreateSchema: true,
+      });
       await storage.onModuleInit();
 
       const exists = await pool.query<{ to_regclass: string | null }>(
-        `SELECT to_regclass('idempotency_records') AS to_regclass`,
+        `SELECT to_regclass($1) AS to_regclass`,
+        [TABLE_NAME],
       );
-      expect(exists.rows[0].to_regclass).toBe('idempotency_records');
+      expect(exists.rows[0].to_regclass).toBe(TABLE_NAME);
     } finally {
-      // Restore default schema even on assertion failure so the next test (or
-      // the next jest run after a failed run) starts from a known state.
-      await PostgresStorage.createSchema(pool);
+      // Restore the suite's table even on assertion failure so the next test
+      // (or the next jest run after a failed run) starts from a known state.
+      await PostgresStorage.createSchema(pool, TABLE_NAME);
     }
   });
 });
@@ -1031,25 +1048,32 @@ import {
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel; each PG spec
+// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
+// The sweep service reads `this.storage.tableName` internally, so passing
+// the unique tableName into the storage flows through to the DELETE.
+const TABLE_NAME = 'idempotency_records_sweep';
+
 describeOrSkip('PostgresSweepService', () => {
   let pool: Pool;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
   });
 
   const seed = async (key: string, expiresOffsetMs: number): Promise<void> => {
     await pool.query(
-      `INSERT INTO idempotency_records
+      `INSERT INTO "${TABLE_NAME}"
          (key, token, fingerprint, status, expires_at)
        VALUES ($1, gen_random_uuid(), 'fp', 'COMPLETED',
                now() + ($2 || ' milliseconds')::interval)`,
@@ -1058,7 +1082,7 @@ describeOrSkip('PostgresSweepService', () => {
   };
 
   const buildService = (opts?: Partial<SweepOptions>): PostgresSweepService => {
-    const storage = new PostgresStorage({ pool });
+    const storage = new PostgresStorage({ pool, tableName: TABLE_NAME });
     return new PostgresSweepService(storage, {
       enabled: true,
       intervalMs: 60_000,
@@ -1076,7 +1100,7 @@ describeOrSkip('PostgresSweepService', () => {
     expect(result.deleted).toBe(2);
 
     const remaining = await pool.query<{ key: string }>(
-      'SELECT key FROM idempotency_records ORDER BY key',
+      `SELECT key FROM "${TABLE_NAME}" ORDER BY key`,
     );
     expect(remaining.rows.map((r) => r.key)).toEqual(['active']);
   });
@@ -1353,6 +1377,10 @@ import {
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel; each PG spec
+// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
+const TABLE_NAME = 'idempotency_records_e2e';
+
 @Controller('payments')
 class PaymentsController {
   static calls = 0;
@@ -1371,21 +1399,22 @@ describeOrSkip('PostgresStorage e2e', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
     PaymentsController.calls = 0;
 
     @Module({
       imports: [
         IdempotencyModule.forRoot({
-          storage: new PostgresStorage({ pool }),
+          storage: new PostgresStorage({ pool, tableName: TABLE_NAME }),
         }),
       ],
       controllers: [PaymentsController],
@@ -1516,22 +1545,27 @@ import { PostgresStorage } from '../../src/storage/postgres.storage';
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel; each PG spec
+// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
+const TABLE_NAME = 'idempotency_records_regression';
+
 describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
   let pool: Pool;
   let storage: PostgresStorage;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
-    storage = new PostgresStorage({ pool });
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
+    storage = new PostgresStorage({ pool, tableName: TABLE_NAME });
   });
 
   it('race-completed-winner: complete() after expired-replacement returns stale', async () => {
@@ -1539,7 +1573,7 @@ describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
 
     // Force the row to be expired so a fresh create() can replace it.
     await pool.query(
-      `UPDATE idempotency_records SET expires_at = now() - interval '1 second'
+      `UPDATE "${TABLE_NAME}" SET expires_at = now() - interval '1 second'
        WHERE key = 'rk'`,
     );
 
@@ -1611,10 +1645,22 @@ through FakeStorage and need no per-adapter copies."
 
 ---
 
-## Task 16: Update CI to run Postgres tests
+## Task 16: Update CI to run Postgres tests + fix cross-spec race condition
+
+This task does two things in the same commit:
+
+1. **Add Postgres service container to CI** — wire `TEST_DATABASE_URL` into the unit + e2e + coverage test steps so the PG suites run in CI.
+2. **Fix the cross-spec table collision** — when multiple PG specs run in parallel, they share the same `idempotency_records` table and TRUNCATE each other. Approach: each PG spec uses its own `tableName` so they cannot collide, regardless of test parallelism.
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`
+- Modify: `test/storage/postgres.storage.spec.ts`
+- Modify: `test/storage/postgres.storage.lifecycle.spec.ts`
+- Modify: `test/services/postgres-sweep.service.spec.ts`
+- Modify: `test/regression/postgres-adapter.spec.ts`
+- Modify: `test/e2e/postgres.e2e-spec.ts`
+
+(All 5 PG spec files get a unique `tableName` so they never collide with one another or with concurrent CI workers.)
 
 - [ ] **Step 1: Add the `postgres` service to the `test` job**
 
@@ -1641,7 +1687,7 @@ After the `runs-on: ubuntu-latest` line and before the `strategy:` block of the 
 
 - [ ] **Step 2: Wire TEST_DATABASE_URL into test steps**
 
-In the `test` job, modify the `Unit tests` and `E2E tests` steps to set the env var:
+In the `test` job, modify the `Unit tests`, `E2E tests`, and `Coverage (primary cell only)` steps to set the env var:
 
 ```yaml
       - name: Unit tests
@@ -1653,25 +1699,130 @@ In the `test` job, modify the `Unit tests` and `E2E tests` steps to set the env 
         env:
           TEST_DATABASE_URL: postgresql://test:test@localhost:5432/idempotency_test
         run: npm run test:e2e
+
+      - name: Coverage (primary cell only)
+        if: matrix.node == '20' && matrix.nestjs == '11'
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/idempotency_test
+        run: npm run test:cov
 ```
 
-Also add the same env block to the `Coverage (primary cell only)` step.
+- [ ] **Step 3: Fix cross-spec table collision via unique tableName per spec**
 
-- [ ] **Step 3: Validate the workflow file syntactically**
+Each PG spec currently uses the default `idempotency_records` table. When jest runs them in parallel (default for `npm test`), they collide — one spec's `TRUNCATE` blows away another spec's seeded fixture. The fix is to give each spec its own table name. The `tableName` option already exists on `PostgresStorage` and `createSchema(pool, tableName)`, so the change is purely in test code.
 
-Run: `npx yaml@2 .github/workflows/ci.yml > /dev/null && echo OK`
-Expected: `OK` (or skip if `yaml` CLI is not installed — the next CI run will validate).
+The 5 spec files and their suffixes:
 
-- [ ] **Step 4: Commit**
+- `test/storage/postgres.storage.spec.ts` → suffix `contract` (table name `idempotency_records_contract`)
+- `test/storage/postgres.storage.lifecycle.spec.ts` → suffix `lifecycle` (`idempotency_records_lifecycle`)
+- `test/services/postgres-sweep.service.spec.ts` → suffix `sweep` (`idempotency_records_sweep`)
+- `test/regression/postgres-adapter.spec.ts` → suffix `regression` (`idempotency_records_regression`)
+- `test/e2e/postgres.e2e-spec.ts` → suffix `e2e` (`idempotency_records_e2e`)
+
+For each spec file:
+
+1. Define a per-spec const near the top: `const TABLE_NAME = 'idempotency_records_<suffix>';`.
+2. Pass it to `PostgresStorage.createSchema(pool, TABLE_NAME)` in `beforeAll`.
+3. Pass `{ pool, tableName: TABLE_NAME }` (alongside any other existing options) into every `new PostgresStorage(...)` call in the spec.
+4. Replace every literal `idempotency_records` reference (raw SQL: TRUNCATE / INSERT / UPDATE / SELECT / DROP TABLE / `to_regclass(...)`) with a template literal using `TABLE_NAME` (e.g. `` `TRUNCATE "${TABLE_NAME}"` ``). Keep parameterized binds (e.g. `$1`) for the *values*; only the *identifier* moves into the template literal.
+5. Drop the unique table in `afterAll` so successive test runs do not accumulate dead tables.
+
+Special cases inside `postgres.storage.spec.ts`:
+
+- The `autoCreateSchema=true creates the table on module init when missing` test must drop and re-create the SAME `TABLE_NAME` it tests against — not the hardcoded default. Update the `to_regclass` call to use the parameterized form `to_regclass($1)` with `[TABLE_NAME]` and the cleanup `createSchema(pool, TABLE_NAME)` call so the suite restores its own table on success or failure.
+- The `honors a custom tableName option` test that uses `'idempotency_alt'` is INTENTIONALLY testing a different table from the suite default. Leave the alt-table name as-is (it's exercising the option itself), but update the "default table should be untouched" assertion to query the suite's `TABLE_NAME` instead of the hardcoded `idempotency_records`.
+
+Special cases inside `postgres-sweep.service.spec.ts`:
+
+- The sweep service reads `this.storage.tableName` to build its DELETE SQL. So as long as the test passes `{ pool, tableName: TABLE_NAME }` into the `PostgresStorage` instance the service receives, the sweep DELETE will target the right table. The `seed(...)` helper that does a raw `INSERT INTO idempotency_records` must be updated to use `TABLE_NAME`. The "remaining rows" assertion's raw `SELECT FROM idempotency_records` must also use `TABLE_NAME`.
+
+Special cases inside `postgres-adapter.spec.ts` (regression):
+
+- The `race-completed-winner` test has a raw `UPDATE idempotency_records SET expires_at = ...`. Update the table name in the UPDATE to use `TABLE_NAME`.
+
+Special cases inside `postgres.e2e-spec.ts`:
+
+- The `storage: new PostgresStorage({ pool, tableName: TABLE_NAME })` is what the controller / interceptor will use, so the IdempotencyInterceptor automatically uses the right table — no controller-level changes needed.
+
+- [ ] **Step 4: Validate the workflow file syntactically**
+
+Run: `node -e "require('js-yaml').load(require('fs').readFileSync('.github/workflows/ci.yml', 'utf8'))"` (or the python alternative `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"`).
+Expected: no error.
+
+- [ ] **Step 5: Run all PG specs in parallel — they should NO LONGER collide**
 
 ```bash
-git add .github/workflows/ci.yml
-git commit -m "ci: add Postgres 16 service container for adapter tests
+TEST_DATABASE_URL=postgresql://test:test@localhost:5433/idempotency_test \
+  npx jest test/storage/postgres.storage.spec.ts \
+           test/storage/postgres.storage.lifecycle.spec.ts \
+           test/services/postgres-sweep.service.spec.ts \
+           test/regression/postgres-adapter.spec.ts \
+           --verbose 2>&1 | tail -30
+```
+Expected: ALL 23 tests pass (15 contract+spec + 2 lifecycle + 4 sweep + 2 regression). No flakiness, no race-related failures.
 
-Provides TEST_DATABASE_URL to the unit, e2e, and coverage steps so the
-PostgresStorage suite is exercised across the full Node × NestJS
-matrix. When TEST_DATABASE_URL is unset (local devs running without
-Docker) the spec files skip cleanly."
+Run the full unit suite to confirm no regression:
+
+```bash
+TEST_DATABASE_URL=postgresql://test:test@localhost:5433/idempotency_test \
+  npm test -- --selectProjects unit 2>&1 | tail -10
+```
+Expected: 132 passing (109 baseline + 23 PG), 0 skipped.
+
+Run with env unset:
+
+```bash
+unset TEST_DATABASE_URL
+npm test -- --selectProjects unit 2>&1 | tail -10
+```
+Expected: 109 passing + 23 skipped — unchanged.
+
+Run e2e:
+
+```bash
+TEST_DATABASE_URL=postgresql://test:test@localhost:5433/idempotency_test \
+  npm run test:e2e 2>&1 | tail -10
+```
+Expected: existing e2e + new postgres e2e all pass.
+
+After verification, drop the test tables (use the unique table names you defined):
+
+```bash
+docker exec -i idempotency-test-pg psql -U test -d idempotency_test -c "
+  DROP TABLE IF EXISTS idempotency_records_contract;
+  DROP TABLE IF EXISTS idempotency_records_lifecycle;
+  DROP TABLE IF EXISTS idempotency_records_sweep;
+  DROP TABLE IF EXISTS idempotency_records_regression;
+  DROP TABLE IF EXISTS idempotency_records_e2e;
+  DROP TABLE IF EXISTS idempotency_records;
+  DROP TABLE IF EXISTS idempotency_alt;
+"
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add .github/workflows/ci.yml \
+        test/storage/postgres.storage.spec.ts \
+        test/storage/postgres.storage.lifecycle.spec.ts \
+        test/services/postgres-sweep.service.spec.ts \
+        test/regression/postgres-adapter.spec.ts \
+        test/e2e/postgres.e2e-spec.ts
+git commit -m "ci(postgres): run PG suite in CI and isolate via per-spec tableName
+
+Two changes that belong together:
+
+1. CI workflow: adds a postgres:16-alpine service container and wires
+   TEST_DATABASE_URL into the unit, e2e, and coverage steps so the
+   Postgres suites are exercised across the full Node × NestJS matrix.
+
+2. Per-spec tableName isolation: each Postgres spec file now uses its
+   own table (idempotency_records_contract, _lifecycle, _sweep,
+   _regression, _e2e). Without this, jest's parallel test runner had
+   the five specs share one table and TRUNCATE each other between
+   tests — producing intermittent failures locally. Per-spec tables
+   eliminate the race entirely without --runInBand or maxWorkers
+   constraints, keeping unit suite throughput intact."
 ```
 
 ---

@@ -15,6 +15,10 @@ import {
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel; each PG spec
+// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
+const TABLE_NAME = 'idempotency_records_e2e';
+
 @Controller('payments')
 class PaymentsController {
   static calls = 0;
@@ -33,21 +37,22 @@ describeOrSkip('PostgresStorage e2e', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
     PaymentsController.calls = 0;
 
     @Module({
       imports: [
         IdempotencyModule.forRoot({
-          storage: new PostgresStorage({ pool }),
+          storage: new PostgresStorage({ pool, tableName: TABLE_NAME }),
         }),
       ],
       controllers: [PaymentsController],

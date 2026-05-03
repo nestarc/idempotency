@@ -9,25 +9,32 @@ import {
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
+// Per-spec table isolation: jest runs spec files in parallel; each PG spec
+// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
+// The sweep service reads `this.storage.tableName` internally, so passing
+// the unique tableName into the storage flows through to the DELETE.
+const TABLE_NAME = 'idempotency_records_sweep';
+
 describeOrSkip('PostgresSweepService', () => {
   let pool: Pool;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await PostgresStorage.createSchema(pool);
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
     await pool.end();
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE idempotency_records');
+    await pool.query(`TRUNCATE "${TABLE_NAME}"`);
   });
 
   const seed = async (key: string, expiresOffsetMs: number): Promise<void> => {
     await pool.query(
-      `INSERT INTO idempotency_records
+      `INSERT INTO "${TABLE_NAME}"
          (key, token, fingerprint, status, expires_at)
        VALUES ($1, gen_random_uuid(), 'fp', 'COMPLETED',
                now() + ($2 || ' milliseconds')::interval)`,
@@ -36,7 +43,7 @@ describeOrSkip('PostgresSweepService', () => {
   };
 
   const buildService = (opts?: Partial<SweepOptions>): PostgresSweepService => {
-    const storage = new PostgresStorage({ pool });
+    const storage = new PostgresStorage({ pool, tableName: TABLE_NAME });
     return new PostgresSweepService(storage, {
       enabled: true,
       intervalMs: 60_000,
@@ -54,7 +61,7 @@ describeOrSkip('PostgresSweepService', () => {
     expect(result.deleted).toBe(2);
 
     const remaining = await pool.query<{ key: string }>(
-      'SELECT key FROM idempotency_records ORDER BY key',
+      `SELECT key FROM "${TABLE_NAME}" ORDER BY key`,
     );
     expect(remaining.rows.map((r) => r.key)).toEqual(['active']);
   });
