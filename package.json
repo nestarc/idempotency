@@ -37,6 +37,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "jest --selectProjects unit",
+    "test:redis": "jest --selectProjects unit --runInBand test/storage/redis.storage.real.spec.ts",
     "test:watch": "jest --selectProjects unit --watch",
     "test:cov": "jest --selectProjects unit --coverage",
     "test:e2e": "jest --selectProjects e2e --runInBand",
@@ -63,6 +64,7 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.11.0",
@@ -90,5 +92,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "fastify": "5.8.5"
   }
 }
