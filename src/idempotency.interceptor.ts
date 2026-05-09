@@ -29,6 +29,7 @@ import {
   IDEMPOTENCY_STORAGE,
   IDEMPOTENT_METADATA_KEY,
 } from './idempotency.constants';
+import { stableJsonStringify } from './utils/stable-json';
 import type {
   IdempotencyOptions,
   IdempotencyScope,
@@ -466,7 +467,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
   private computeFingerprint(body: unknown): string {
     return createHash('sha256')
-      .update(JSON.stringify(body ?? null))
+      .update(stableJsonStringify(body ?? null)!)
       .digest('hex');
   }
 

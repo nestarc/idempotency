@@ -13,6 +13,7 @@ import { createHash } from 'crypto';
 import { IdempotencyInterceptor } from '../src/idempotency.interceptor';
 import { Idempotent } from '../src/idempotency.decorator';
 import { IDEMPOTENT_METADATA_KEY } from '../src/idempotency.constants';
+import { stableJsonStringify } from '../src/utils/stable-json';
 import type { IdempotencyOptions } from '../src/interfaces/idempotency-options.interface';
 import type { IdempotentMetadata } from '../src/interfaces/idempotency-options.interface';
 
@@ -24,7 +25,7 @@ import {
 } from './support/execution-context.factory';
 
 const sha256 = (input: unknown): string =>
-  createHash('sha256').update(JSON.stringify(input ?? null)).digest('hex');
+  createHash('sha256').update(stableJsonStringify(input ?? null)!).digest('hex');
 
 /**
  * Convenience: build an interceptor wired to a fresh `FakeStorage` and the
@@ -374,6 +375,36 @@ describe('IdempotencyInterceptor', () => {
       const result = await firstValueFrom(interceptor.intercept(context, next));
       expect(result).toEqual({ id: 42 });
       expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('treats object key order differences as the same fingerprint', async () => {
+      const { interceptor, storage } = buildInterceptor();
+      storage.seed({
+        key: 'K-stable',
+        fingerprint: sha256({ a: { c: 3, d: 4 }, b: 2 }),
+        status: 'COMPLETED',
+        statusCode: 200,
+        responseBody: '{"ok":true}',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-stable' },
+          body: { b: 2, a: { d: 4, c: 3 } },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler();
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ ok: true });
+      expect(next.handleSpy).not.toHaveBeenCalled();
     });
   });
 
