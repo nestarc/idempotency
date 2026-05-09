@@ -34,8 +34,8 @@ const config: Config = {
       transform: tsJestTransform,
       clearMocks: true,
       restoreMocks: true,
-      testMatch: ['<rootDir>/test/**/*.spec.ts'],
-      testPathIgnorePatterns: ['<rootDir>/test/e2e/'],
+      testMatch: ['**/test/**/*.spec.ts'],
+      testPathIgnorePatterns: ['[/\\\\]test[/\\\\]e2e[/\\\\]'],
     },
     {
       displayName: 'e2e',
@@ -45,7 +45,7 @@ const config: Config = {
       transform: tsJestTransform,
       clearMocks: true,
       restoreMocks: true,
-      testMatch: ['<rootDir>/test/e2e/**/*.e2e-spec.ts'],
+      testMatch: ['**/test/e2e/**/*.e2e-spec.ts'],
     },
   ],
 };
