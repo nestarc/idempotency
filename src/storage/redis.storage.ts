@@ -37,6 +37,7 @@ interface SerializedPayload {
   status: 'PROCESSING' | 'COMPLETED';
   statusCode?: number;
   responseBody?: string;
+  responseHeaders?: Record<string, string>;
   createdAt: string; // ISO
   expiresAt: string; // ISO
 }
@@ -121,6 +122,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
       status: payload.status,
       statusCode: payload.statusCode,
       responseBody: payload.responseBody,
+      responseHeaders: payload.responseHeaders,
       createdAt: new Date(payload.createdAt),
       expiresAt: new Date(payload.expiresAt),
     };
@@ -170,6 +172,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
       status: 'COMPLETED',
       statusCode: response.statusCode,
       responseBody: response.body,
+      responseHeaders: response.headers,
       // createdAt intentionally preserved across complete().
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
     };

@@ -80,7 +80,8 @@ export class FakeStorage implements IdempotencyStorage {
         status: 'COMPLETED',
         statusCode: response.statusCode,
         responseBody: response.body,
-        createdAt: now,
+        responseHeaders: response.headers ? { ...response.headers } : undefined,
+        createdAt: existing.createdAt,
         expiresAt: new Date(now.getTime() + ttlSeconds * 1000),
       });
       this.ledger.push({

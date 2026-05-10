@@ -9,6 +9,9 @@ export interface CompleteResponse {
 
   /** JSON-serialized response body, or undefined for empty bodies (e.g. 204). */
   body?: string;
+
+  /** Lowercase HTTP response headers captured for replay. */
+  headers?: Record<string, string>;
 }
 
 /**

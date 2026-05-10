@@ -115,11 +115,12 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
       status: 'PROCESSING' | 'COMPLETED';
       response_code: number | null;
       response_body: string | null;
+      response_headers: Record<string, string> | null;
       created_at: Date;
       expires_at: Date;
     }>(
       `SELECT key, token, fingerprint, status, response_code, response_body,
-              created_at, expires_at
+              response_headers, created_at, expires_at
          FROM ${quoteIdent(this.tableName)}
          WHERE key = $1 AND expires_at > now()`,
       [key],
@@ -133,6 +134,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
       status: row.status,
       statusCode: row.response_code ?? undefined,
       responseBody: row.response_body ?? undefined,
+      responseHeaders: row.response_headers ?? undefined,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
     };
@@ -154,6 +156,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
              status = 'PROCESSING',
              response_code = NULL,
              response_body = NULL,
+             response_headers = NULL,
              created_at = now(),
              expires_at = EXCLUDED.expires_at
          WHERE ${quoteIdent(this.tableName)}.expires_at < now()
@@ -181,9 +184,17 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
            SET status        = 'COMPLETED',
                response_code = $3,
                response_body = $4,
-               expires_at    = now() + ($5 || ' seconds')::interval
+               response_headers = $5,
+               expires_at    = now() + ($6 || ' seconds')::interval
            WHERE key = $1 AND token = $2 AND status = 'PROCESSING'`,
-        [key, token, response.statusCode, response.body ?? null, String(ttlSeconds)],
+        [
+          key,
+          token,
+          response.statusCode,
+          response.body ?? null,
+          response.headers ?? null,
+          String(ttlSeconds),
+        ],
       );
       return result.rowCount === 1 ? 'ok' : 'stale';
     } catch (err) {

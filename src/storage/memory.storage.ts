@@ -89,6 +89,7 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
       status: 'COMPLETED',
       statusCode: response.statusCode,
       responseBody: response.body,
+      responseHeaders: response.headers ? { ...response.headers } : undefined,
       // `createdAt` is INTENTIONALLY preserved — it is an invariant field
       // of IdempotencyRecord (see interface docstring). Only `expiresAt`
       // is refreshed to the new TTL window.

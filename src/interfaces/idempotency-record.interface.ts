@@ -10,9 +10,6 @@ export type IdempotencyStatus = 'PROCESSING' | 'COMPLETED';
 
 /**
  * The persisted shape of an idempotency record across all storage adapters.
- *
- * v0.1 caches only `statusCode` and `responseBody`. Response headers are deferred
- * to v0.2.
  */
 export interface IdempotencyRecord {
   /** The exact value of the `Idempotency-Key` header from the original request. */
@@ -41,6 +38,9 @@ export interface IdempotencyRecord {
 
   /** JSON-serialized response body, ready to be parsed and replayed. */
   responseBody?: string;
+
+  /** Lowercase HTTP response headers captured for replay. */
+  responseHeaders?: Record<string, string>;
 
   /**
    * When the record was first created by `IdempotencyStorage.create()`.

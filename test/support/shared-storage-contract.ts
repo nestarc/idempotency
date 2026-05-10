@@ -10,7 +10,7 @@
  *   3. A second `create()` for the same key returns `acquired: false`
  *      and does not clobber the original record (NX semantics).
  *   4. `complete()` with a matching token transitions PROCESSING → COMPLETED
- *      and persists statusCode + body.
+ *      and persists statusCode + body + headers.
  *   5. `complete()` with a wrong token returns `'stale'` and does NOT mutate.
  *   6. `complete()` preserves `createdAt` (invariant field).
  *   7. `delete()` with a matching token removes the record.
@@ -92,6 +92,30 @@ export const describeStorageContract = (
       expect(record!.status).toBe('COMPLETED');
       expect(record!.statusCode).toBe(201);
       expect(record!.responseBody).toBe('{"id":"xyz"}');
+    });
+
+    it('complete() snapshots response headers for replay', async () => {
+      const headers: Record<string, string> = {
+        location: '/payments/pay_1',
+        'x-request-id': 'req_1',
+      };
+      const { token } = await storage.create('contract-headers', 'fp', 60);
+      const result = await storage.complete(
+        'contract-headers',
+        token!,
+        { statusCode: 201, body: '{"id":"xyz"}', headers },
+        3600,
+      );
+      expect(result).toBe('ok');
+
+      headers.location = '/mutated';
+      headers['x-added-after-complete'] = 'too-late';
+
+      const record = await storage.get('contract-headers');
+      expect(record!.responseHeaders).toEqual({
+        location: '/payments/pay_1',
+        'x-request-id': 'req_1',
+      });
     });
 
     it('complete() with a wrong token returns "stale" and does not mutate', async () => {
