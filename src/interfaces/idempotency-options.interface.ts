@@ -22,6 +22,8 @@ export type IdempotencyScope =
   | 'global'
   | ((context: ExecutionContext) => string);
 
+export type ReplayHeadersOption = boolean | string[];
+
 /**
  * Module-level configuration passed to {@link IdempotencyModule.forRoot}.
  */
@@ -63,6 +65,18 @@ export interface IdempotencyOptions {
    * @default 'endpoint'
    */
   scope?: IdempotencyScope;
+
+  /**
+   * Controls which response headers are captured and replayed.
+   *
+   * `true` or undefined uses the conservative default allowlist.
+   * `false` disables header replay.
+   * A string array uses an explicit allowlist, still filtered through the
+   * unsafe header denylist.
+   *
+   * @default true
+   */
+  replayHeaders?: ReplayHeadersOption;
 
   /**
    * When true, the module is registered as a global module (no need to import

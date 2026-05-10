@@ -43,6 +43,7 @@ export type {
   IdempotencyAsyncOptions,
   IdempotencyOptionsFactory,
   IdempotencyScope,
+  ReplayHeadersOption,
   IdempotentOptions,
   IdempotentMetadata,
 } from './interfaces/idempotency-options.interface';
