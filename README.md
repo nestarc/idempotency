@@ -194,8 +194,16 @@ Three options, pick whichever fits your tooling:
    ```
 3. **Auto on module init (development only):**
    ```ts
-   new PostgresStorage({ pool, autoCreateSchema: true })
+   new PostgresStorage({ pool, autoCreateSchema: true });
    ```
+
+For existing v0.2.x Postgres installations upgrading to v0.3.0, add the
+response header column once:
+
+```sql
+ALTER TABLE idempotency_records
+  ADD COLUMN IF NOT EXISTS response_headers JSONB;
+```
 
 ### Optional sweep service
 
@@ -211,9 +219,7 @@ import {
 } from '@nestarc/idempotency';
 
 @Module({
-  imports: [
-    IdempotencyModule.forRoot({ storage: new PostgresStorage({ pool }) }),
-  ],
+  imports: [IdempotencyModule.forRoot({ storage: new PostgresStorage({ pool }) })],
   providers: [
     PostgresSweepService,
     {
@@ -239,24 +245,25 @@ SELECT cron.schedule('idempotency-sweep', '* * * * *',
 
 ### Module options (`IdempotencyModule.forRoot(...)`)
 
-| Option        | Type                         | Default            | Description                                                  |
-| ------------- | ---------------------------- | ------------------ | ------------------------------------------------------------ |
-| `storage`     | `IdempotencyStorage`         | (required)         | A storage adapter instance (e.g. `new MemoryStorage()`).     |
-| `ttl`         | `number` (seconds)           | `86400`            | Default time-to-live for records. Per-handler can override.  |
-| `headerName`  | `string`                     | `'Idempotency-Key'`| HTTP header carrying the key. Defaults to the IETF standard. |
-| `fingerprint` | `boolean`                    | `true`             | Compute a SHA-256 fingerprint of the request body.           |
-| `scope`       | `IdempotencyScope`           | `'endpoint'`       | How storage keys are namespaced. See [Scope](#scope) below.  |
-| `isGlobal`    | `boolean`                    | `true`             | Register as a NestJS global module.                          |
+| Option          | Type                  | Default             | Description                                                                         |
+| --------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------- |
+| `storage`       | `IdempotencyStorage`  | (required)          | A storage adapter instance (e.g. `new MemoryStorage()`).                            |
+| `ttl`           | `number` (seconds)    | `86400`             | Default time-to-live for records. Per-handler can override.                         |
+| `headerName`    | `string`              | `'Idempotency-Key'` | HTTP header carrying the key. Defaults to the IETF standard.                        |
+| `fingerprint`   | `boolean`             | `true`              | Compute a SHA-256 fingerprint of the request body.                                  |
+| `scope`         | `IdempotencyScope`    | `'endpoint'`        | How storage keys are namespaced. See [Scope](#scope) below.                         |
+| `replayHeaders` | `boolean \| string[]` | `true`              | Replay the default safe allowlist, an explicit allowlist, or disable header replay. |
+| `isGlobal`      | `boolean`             | `true`              | Register as a NestJS global module.                                                 |
 
 #### Scope
 
 The `scope` option controls how the storage key is derived from the raw header value. It matters when two different endpoints might receive the same `Idempotency-Key` value from a client.
 
-| Value        | Behavior                                                                                     |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| `'endpoint'` | **Default.** Prepends `HTTP_METHOD /route::` to the key, using the actual route path read from NestJS `PATH_METADATA` (e.g. `POST /payments::my-key`). Two endpoints with different route paths are isolated even if their controller classes share a name (v1/v2 APIs, same-named controllers across modules). If the handler has no `PATH_METADATA` (custom decorators, non-NestJS integrations), it gracefully falls back to `ControllerClassName#methodName::`. |
-| `'global'`   | Use the raw header value as-is. Safe only if clients guarantee globally-unique keys across all endpoints (Stripe-style). |
-| function     | `(ctx: ExecutionContext) => string`. Fully custom scoping — useful in multi-tenant systems where the scope should include the tenant id. The returned string is joined to the raw key with `::`. |
+| Value        | Behavior                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `'endpoint'` | **Default.** Prepends `HTTP_METHOD /actual/path::` to the key, using the request path without the query string (e.g. `POST /payments/pay_1/capture::my-key`). This isolates parameterized resources such as `/orders/1` and `/orders/2`. Query strings are intentionally excluded to avoid accidental key drift from query ordering; use a custom `scope` function if query values must participate in idempotency. |
+| `'global'`   | Use the raw header value as-is. Safe only if clients guarantee globally-unique keys across all endpoints (Stripe-style).                                                                                                                                                                                                                                                                                            |
+| function     | `(ctx: ExecutionContext) => string`. Fully custom scoping — useful in multi-tenant systems where the scope should include the tenant id. The returned string is joined to the raw key with `::`.                                                                                                                                                                                                                    |
 
 ```ts
 // Multi-tenant example: include the tenant ID in the scope.
@@ -271,11 +278,37 @@ IdempotencyModule.forRoot({
 
 ### Decorator options (`@Idempotent(options?)`)
 
-| Option        | Type      | Default | Description                                                                          |
-| ------------- | --------- | ------- | ------------------------------------------------------------------------------------ |
+| Option        | Type      | Default | Description                                                                             |
+| ------------- | --------- | ------- | --------------------------------------------------------------------------------------- |
 | `required`    | `boolean` | `true`  | If true and the header is missing, the interceptor returns 400. If false, pass-through. |
-| `ttl`         | `number`  | inherit | Override the module-level TTL for this handler (seconds).                             |
-| `fingerprint` | `boolean` | inherit | Override the module-level fingerprint setting.                                        |
+| `ttl`         | `number`  | inherit | Override the module-level TTL for this handler (seconds).                               |
+| `fingerprint` | `boolean` | inherit | Override the module-level fingerprint setting.                                          |
+
+### Response header replay
+
+v0.3 caches and replays a conservative set of response headers by default:
+`Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers.
+Unsafe or hop-by-hop headers such as `Set-Cookie`, `Connection`, and
+`Transfer-Encoding` are never cached.
+
+Configure header replay at module level:
+
+```ts
+IdempotencyModule.forRoot({
+  storage: new MemoryStorage(),
+  replayHeaders: true, // default allowlist
+});
+
+IdempotencyModule.forRoot({
+  storage: new MemoryStorage(),
+  replayHeaders: ['location', 'x-request-id'], // explicit allowlist
+});
+
+IdempotencyModule.forRoot({
+  storage: new MemoryStorage(),
+  replayHeaders: false, // status/body only
+});
+```
 
 ## How it works
 
@@ -291,7 +324,7 @@ Client Request (with Idempotency-Key header)
     │     └─ resolve TTL (reject 0/negative/fractional/NaN/Infinity)
     │
     ├─ 2. Apply scope to the key
-    │     (default: `HTTP_METHOD /route::` from NestJS PATH_METADATA)
+    │     (default: `HTTP_METHOD /actual/path::`, without query string)
     │
     ├─ 3. Look up the scoped key in storage
     │     ├─ COMPLETED + fingerprint match       → replay cached response
@@ -308,7 +341,7 @@ Client Request (with Idempotency-Key header)
     ├─ 5. Run the controller handler
     │
     └─ 6. Capture the response
-          ├─ plain JSON             → storage.complete(token, statusCode, body)
+          ├─ plain JSON             → storage.complete(token, statusCode, body, safe headers)
           │   ├─ 'ok'               → emit handler value
           │   ├─ 'stale' (TTL race) → warn + emit (don't clobber newer record)
           │   └─ throws (transient) → ERROR log + emit (don't delete — retries
@@ -324,24 +357,24 @@ Storage adapters implement **token-based compare-and-set**: each `create()` retu
 
 ## Error reference
 
-| Status | When                                                                                         | IETF rationale            |
-| -----: | -------------------------------------------------------------------------------------------- | ------------------------- |
-|    400 | `Idempotency-Key` header is missing and `required: true` (the default), or a configured `ttl` is not a positive integer | client contract / developer error |
-|    409 | The record under this scoped key is currently `PROCESSING` — either observed on the initial read or after losing an atomic `create()` race to a winner still in flight | concurrent duplicate      |
-|    422 | A record exists under this scoped key with a different request-body fingerprint (reused key with new payload)           | key reused with new payload |
+| Status | When                                                                                                                                                                   | IETF rationale                    |
+| -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+|    400 | `Idempotency-Key` header is missing and `required: true` (the default), or a configured `ttl` is not a positive integer                                                | client contract / developer error |
+|    409 | The record under this scoped key is currently `PROCESSING` — either observed on the initial read or after losing an atomic `create()` race to a winner still in flight | concurrent duplicate              |
+|    422 | A record exists under this scoped key with a different request-body fingerprint (reused key with new payload)                                                          | key reused with new payload       |
 
 Note that v0.1.3+ returns a **replay** (not a 409) when the race winner has already finished — the interceptor re-reads the record on a lost `create()` race and dispatches through the same state machine as the initial-read branch.
 
 ## Storage adapters
 
-| Feature                | `MemoryStorage`              | `RedisStorage`                          | `PostgresStorage`                              |
-| ---------------------- | ---------------------------- | --------------------------------------- | ---------------------------------------------- |
-| Scope                  | single process               | shared across replicas                  | shared across replicas                         |
-| Persistence            | none (lost on restart)       | full Redis durability                   | full Postgres durability                       |
-| TTL mechanism          | `setTimeout`                 | Redis `EXPIRE`                          | lazy on `get()` + optional sweep service       |
-| Cluster-safe           | ❌                           | ✅                                      | ✅                                             |
-| Production-ready       | ❌ (dev/test only)           | ✅                                      | ✅                                             |
-| Required peer          | none                         | `ioredis ^5`                            | `pg ^8.11`                                     |
+| Feature          | `MemoryStorage`        | `RedisStorage`         | `PostgresStorage`                        |
+| ---------------- | ---------------------- | ---------------------- | ---------------------------------------- |
+| Scope            | single process         | shared across replicas | shared across replicas                   |
+| Persistence      | none (lost on restart) | full Redis durability  | full Postgres durability                 |
+| TTL mechanism    | `setTimeout`           | Redis `EXPIRE`         | lazy on `get()` + optional sweep service |
+| Cluster-safe     | ❌                     | ✅                     | ✅                                       |
+| Production-ready | ❌ (dev/test only)     | ✅                     | ✅                                       |
+| Required peer    | none                   | `ioredis ^5`           | `pg ^8.11`                               |
 
 ### Custom storage adapters
 
@@ -407,39 +440,37 @@ The package ships a **shared contract test suite** at `test/support/shared-stora
 
 ## IETF spec compliance
 
-This package targets [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). As of v0.1.3 it covers:
+This package targets [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). As of v0.3.0 it covers:
 
 - ✅ `Idempotency-Key` header recognition (configurable name)
-- ✅ Atomic key creation with NX semantics (both adapters)
+- ✅ Atomic key creation with NX semantics (built-in adapters)
 - ✅ **Token-based compare-and-set** on every mutation — a slow caller whose record was evicted by TTL cannot clobber a newer caller's record
 - ✅ Response replay for completed requests (matching fingerprint)
 - ✅ **409 Conflict** only when the winner is genuinely still in flight (not for lost races against already-completed winners)
 - ✅ **422 Unprocessable Entity** for fingerprint mismatch — priority over PROCESSING state per draft semantics
 - ✅ Configurable TTL with per-endpoint override and boundary validation (positive integer only)
-- ✅ **Per-endpoint key scoping via `PATH_METADATA`** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /route::rawKey`, matching v1/v2 API isolation out of the box
+- ✅ **Per-endpoint key scoping by actual request path** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /actual/path::rawKey`, excluding the query string to avoid accidental key drift
 - ✅ Binary response detection — Buffer, typed arrays, and Node/Web streams are bypassed rather than cached as JSON garbage
+- ✅ Safe response header replay for `Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers
 - ✅ **Transient storage-write failures** do NOT cause duplicate execution — a failing `complete()` is caught and the handler's response is still emitted to the caller
 
 Deferred to future versions:
 
-- 🚧 Response header replay (v0.3)
-- 🚧 Fastify adapter verification (v0.3)
-- 🚧 Stable JSON stringify for fingerprint (v0.3)
-- 🚧 Dual ESM/CJS build (v0.3)
+- 🚧 Transactional integration (`@TransactionalIdempotent`)
+- 🚧 Dual ESM/CJS build
+- 🚧 Custom fingerprint functions and metrics
 
-## Caveats (v0.1)
+## Caveats
 
-- **Body fingerprint uses insertion-order `JSON.stringify`** — clients should send stable JSON. Two requests with the same fields in different orders will hash differently and be treated as a fingerprint mismatch.
+- **Body fingerprint uses stable JSON serialization.** Object keys are sorted recursively before hashing, so semantically equivalent JSON objects with different key order produce the same fingerprint. Array order remains significant.
 - **Only plain-JSON responses are cached.** Buffers, typed arrays, Node streams, and Web `ReadableStream` are actively detected and bypass caching with a logged warning — the handler still runs and the caller still gets the response, but there is no replay for binary endpoints.
-- **Response headers are not replayed in v0.1.** The cached response carries the original status code and body only.
-- **Express adapter only.** Fastify is not yet verified.
 - **TTL-expiry race is closed via token-based CAS.** A slow request whose PROCESSING record has been evicted by TTL cannot clobber a newer request's record under the same key — the storage refuses the write and the interceptor logs a `stale token` warning while still emitting the handler's response to the caller.
 
 ## Roadmap
 
 - v0.2 (shipped): PostgreSQL storage adapter (`pg`), opt-in sweep service, bundled SQL DDL
-- v0.3: Transactional integration (`@TransactionalIdempotent`), response header replay, Fastify verification, dual ESM/CJS build, stable stringify, multi-Postgres-major CI matrix
-- v0.4: Custom fingerprint functions, metrics (hit rate, conflict rate), business-error caching option, Swagger/OpenAPI integration
+- v0.3 (shipped): Stable JSON fingerprinting, safe response header replay, Fastify verification, real Redis smoke coverage, hardened release validation
+- v0.4: Transactional integration (`@TransactionalIdempotent`), custom fingerprint functions, metrics (hit rate, conflict rate), business-error caching option, Swagger/OpenAPI integration
 
 ## License
 

@@ -4,9 +4,29 @@ All notable changes to `@nestarc/idempotency` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-10
+
+### Added
+
+- Added stable JSON request fingerprinting so object key order does not cause false 422 responses.
+- Added safe response header capture and replay for `Content-Type`, `Location`, `ETag`, `Cache-Control`, and `X-*` headers.
+- Added Fastify adapter e2e verification.
+- Added real Redis smoke coverage in CI.
+
+### Changed
+
+- Changed default endpoint scoping to use the actual request path without query string, fixing collisions for parameterized routes.
+- Hardened release validation so Postgres-backed tests run before npm publish.
+
+### Migration
+
+- Existing Postgres users should add `response_headers JSONB`:
+  `ALTER TABLE idempotency_records ADD COLUMN IF NOT EXISTS response_headers JSONB;`
+
 ## [0.2.0] - 2026-05-03
 
 ### Added
+
 - `PostgresStorage` — third built-in `IdempotencyStorage` adapter for Postgres.
   Atomic NX via `INSERT ... ON CONFLICT DO UPDATE WHERE expires_at < now()`,
   token-based CAS on `complete()` / `delete()`, lazy expiration on `get()`.
@@ -89,8 +109,7 @@ pre-publication — no external breakage.
     COMPLETED mismatch → 422, PROCESSING → 409, vanished → 409)
   - `path-based-scope.spec.ts` — 2 tests (cross-module isolation,
     key-prefix shape assertion)
-  - `ttl-validation.spec.ts` — 11 tests (5 invalid values × 2 levels
-    + 1 valid baseline)
+  - `ttl-validation.spec.ts` — 11 tests (5 invalid values × 2 levels + 1 valid baseline)
 - Public exports: `CreateResult`, `MutateResult`, `IdempotencyScope`.
   Previously documented in the type-level contract but not surfaced
   from the barrel.
@@ -120,12 +139,12 @@ semantics for existing tests.
   Nest shutdown.** `MemoryStorage` already implemented `OnModuleDestroy`,
   so it was automatically torn down when the host Nest app called
   `app.close()`; `RedisStorage` only exposed a bare `close()` method
-  that Nest never invoked. Consumers who built `new RedisStorage({
-  connection: { ... } })` (letting the storage manage its own client)
-  leaked a Redis connection on every shutdown. `RedisStorage` now
-  implements `OnModuleDestroy` which delegates to `close()`. If the
-  consumer passed their own `client`, the hook remains a no-op —
-  lifecycle stays with the owner.
+  that Nest never invoked. Consumers who built
+  `new RedisStorage({ connection: { ... } })` (letting the storage manage
+  its own client) leaked a Redis connection on every shutdown. `RedisStorage`
+  now implements `OnModuleDestroy` which delegates to `close()`. If the
+  consumer passed their own `client`, the hook remains a no-op — lifecycle
+  stays with the owner.
 
 - **LSP / `createdAt` contract drift.** The `IdempotencyRecord` interface
   documents `createdAt` as "when the record was first created",
@@ -147,6 +166,7 @@ semantics for existing tests.
     delegate + cleanup
   - `captureResponse(scopedKey, token, value, res, ttl)` — serialization,
     guards, stale-token handling
+
   No class split — the refactor is file-local. Every existing test (76)
   still passes unchanged, proving the behavior is preserved.
 
