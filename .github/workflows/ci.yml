@@ -106,6 +106,7 @@ jobs:
             @nestjs/common@^10 \
             @nestjs/core@^10 \
             @nestjs/platform-express@^10 \
+            @nestjs/platform-fastify@^10 \
             @nestjs/testing@^10
 
       - name: Unit tests
@@ -133,9 +134,43 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  redis-smoke:
+    name: Redis smoke
+    needs: lint
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Real Redis smoke tests
+        env:
+          TEST_REDIS_URL: redis://localhost:6379
+        run: npm run test:redis
+
   pack:
     name: Pack (publish dry-run)
-    needs: test
+    needs: [test, redis-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
