@@ -165,5 +165,41 @@ describe('response header replay utilities', () => {
       expect(setHeader).toHaveBeenCalledTimes(1);
       expect(setHeader).toHaveBeenCalledWith('location', '/orders/123');
     });
+
+    it('does not replay stored headers when disabled', () => {
+      const setHeader = jest.fn();
+
+      replayStoredHeaders(
+        {
+          setHeader,
+        },
+        {
+          location: '/orders/123',
+        },
+        false,
+      );
+
+      expect(setHeader).not.toHaveBeenCalled();
+    });
+
+    it('matches explicit replay allowlists case-insensitively', () => {
+      const setHeader = jest.fn();
+
+      replayStoredHeaders(
+        {
+          setHeader,
+        },
+        {
+          Location: '/orders/123',
+          'x-request-id': 'req-123',
+          etag: '"abc123"',
+          'set-cookie': 'sid=abc',
+        },
+        ['LOCATION'],
+      );
+
+      expect(setHeader).toHaveBeenCalledTimes(1);
+      expect(setHeader).toHaveBeenCalledWith('location', '/orders/123');
+    });
   });
 });

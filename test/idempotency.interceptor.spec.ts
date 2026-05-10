@@ -976,10 +976,223 @@ describe('IdempotencyInterceptor', () => {
   });
 
   // ──────────────────────────────────────────────────────────────────
-  // Group K: binary response detection (P2 regression)
+  // Group K: response header capture/replay
   // ──────────────────────────────────────────────────────────────────
 
-  describe('K. binary response detection (P2 regression)', () => {
+  describe('K. response header capture/replay', () => {
+    it('captures allowed response headers before emitting original response', async () => {
+      const { interceptor, storage } = buildInterceptor();
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(201, {
+        location: '/payments/pay_1',
+        'x-request-id': 'req_1',
+        'set-cookie': 'sid=secret',
+      });
+      const body = { id: 'pay_1' };
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-headers' },
+          body: { amount: 100 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of(body));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toBe(body);
+      expect(storage.complete).toHaveBeenCalledWith(
+        'K-headers',
+        expect.any(String),
+        {
+          statusCode: 201,
+          body: '{"id":"pay_1"}',
+          headers: {
+            location: '/payments/pay_1',
+            'x-request-id': 'req_1',
+          },
+        },
+        86_400,
+      );
+      expect(storage.complete.mock.calls[0][2].headers).not.toHaveProperty(
+        'set-cookie',
+      );
+    });
+
+    it('replays stored headers and status for completed records', async () => {
+      const { interceptor, storage } = buildInterceptor();
+      const fp = sha256({ amount: 100 });
+      storage.seed({
+        key: 'K-replay-headers',
+        fingerprint: fp,
+        status: 'COMPLETED',
+        statusCode: 201,
+        responseBody: '{"id":"pay_1"}',
+        responseHeaders: {
+          location: '/payments/pay_1',
+          'x-request-id': 'req_1',
+        },
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-replay-headers' },
+          body: { amount: 100 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of('NEVER'));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ id: 'pay_1' });
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'location',
+        '/payments/pay_1',
+      );
+      expect(res.setHeader).toHaveBeenCalledWith('x-request-id', 'req_1');
+      expect(next.handleSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not capture headers when replayHeaders=false', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        replayHeaders: false,
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(201, {
+        location: '/payments/pay_1',
+      });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-no-headers' },
+          body: { amount: 100 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of({ id: 'pay_1' }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.complete).toHaveBeenCalledWith(
+        'K-no-headers',
+        expect.any(String),
+        {
+          statusCode: 201,
+          body: '{"id":"pay_1"}',
+          headers: undefined,
+        },
+        86_400,
+      );
+    });
+
+    it('does not replay stored headers when replayHeaders=false', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        replayHeaders: false,
+      });
+      const fp = sha256({ amount: 100 });
+      storage.seed({
+        key: 'K-replay-disabled',
+        fingerprint: fp,
+        status: 'COMPLETED',
+        statusCode: 201,
+        responseBody: '{"id":"pay_1"}',
+        responseHeaders: {
+          location: '/payments/pay_1',
+          'x-request-id': 'req_1',
+        },
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-replay-disabled' },
+          body: { amount: 100 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of('NEVER'));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ id: 'pay_1' });
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.setHeader).not.toHaveBeenCalled();
+      expect(next.handleSpy).not.toHaveBeenCalled();
+    });
+
+    it('filters stored replay headers through explicit allowlist', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        replayHeaders: ['location'],
+      });
+      const fp = sha256({ amount: 100 });
+      storage.seed({
+        key: 'K-replay-allowlist',
+        fingerprint: fp,
+        status: 'COMPLETED',
+        statusCode: 201,
+        responseBody: '{"id":"pay_1"}',
+        responseHeaders: {
+          location: '/payments/pay_1',
+          'x-request-id': 'req_1',
+          etag: '"pay_1"',
+          'set-cookie': 'sid=secret',
+        },
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-replay-allowlist' },
+          body: { amount: 100 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of('NEVER'));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ id: 'pay_1' });
+      expect(res.setHeader).toHaveBeenCalledTimes(1);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'location',
+        '/payments/pay_1',
+      );
+      expect(res.setHeader).not.toHaveBeenCalledWith(
+        'x-request-id',
+        expect.any(String),
+      );
+      expect(res.setHeader).not.toHaveBeenCalledWith(
+        'etag',
+        expect.any(String),
+      );
+      expect(res.setHeader).not.toHaveBeenCalledWith(
+        'set-cookie',
+        expect.any(String),
+      );
+    });
+  });
+
+  // Group L: binary response detection (P2 regression)
+
+  describe('L. binary response detection (P2 regression)', () => {
     const nonReplayableCases: Array<{ name: string; build: () => unknown }> = [
       {
         name: 'Buffer',

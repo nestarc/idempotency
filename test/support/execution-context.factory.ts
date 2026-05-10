@@ -12,16 +12,32 @@ export interface FakeRequest {
 export interface FakeResponse {
   statusCode: number;
   status: jest.Mock<FakeResponse, [number]>;
+  getHeaders: jest.Mock<Record<string, string>>;
+  setHeader: jest.Mock<FakeResponse, [string, string]>;
 }
 
 /**
  * Builds a `FakeResponse` whose `status(n)` mutates `statusCode` and is itself
  * a jest.fn so test assertions can verify both the call and the resulting state.
  */
-export const buildResponse = (initialStatus = 200): FakeResponse => {
+export const buildResponse = (
+  initialStatus = 200,
+  initialHeaders: Record<string, string> = {},
+): FakeResponse => {
+  const headers = Object.fromEntries(
+    Object.entries(initialHeaders).map(([name, value]) => [
+      name.toLowerCase(),
+      value,
+    ]),
+  );
   const res: Partial<FakeResponse> = { statusCode: initialStatus };
   res.status = jest.fn((code: number): FakeResponse => {
     (res as FakeResponse).statusCode = code;
+    return res as FakeResponse;
+  });
+  res.getHeaders = jest.fn(() => ({ ...headers }));
+  res.setHeader = jest.fn((name: string, value: string): FakeResponse => {
+    headers[name.toLowerCase()] = value;
     return res as FakeResponse;
   });
   return res as FakeResponse;

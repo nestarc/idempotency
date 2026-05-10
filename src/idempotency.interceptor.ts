@@ -30,11 +30,18 @@ import {
   IDEMPOTENT_METADATA_KEY,
 } from './idempotency.constants';
 import { extractActualRequestPath } from './utils/request-scope';
+import {
+  captureReplayHeaders,
+  replayStoredHeaders,
+  type HeaderCaptureResponse,
+  type HeaderReplayResponse,
+} from './utils/response-headers';
 import { stableJsonStringify } from './utils/stable-json';
 import type {
   IdempotencyOptions,
   IdempotencyScope,
   IdempotentMetadata,
+  ReplayHeadersOption,
 } from './interfaces/idempotency-options.interface';
 import type {
   IdempotencyRecord,
@@ -47,6 +54,7 @@ interface ResolvedOptions {
   fingerprint: boolean;
   headerName: string;
   scope: IdempotencyScope;
+  replayHeaders: ReplayHeadersOption | undefined;
 }
 
 /**
@@ -55,7 +63,7 @@ interface ResolvedOptions {
  * for the two operations we actually use: reading the effective statusCode
  * and setting it for a replay.
  */
-interface ResponseShape {
+interface ResponseShape extends HeaderCaptureResponse, HeaderReplayResponse {
   statusCode?: number;
   status: (code: number) => unknown;
 }
@@ -147,7 +155,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return from(this.storage.get(scopedKey)).pipe(
       switchMap((existing) => {
         if (existing) {
-          return this.handleExistingRecord(existing, fingerprint, res);
+          return this.handleExistingRecord(existing, fingerprint, res, opts);
         }
         return this.acquireAndRun(scopedKey, fingerprint, opts, res, next);
       }),
@@ -170,6 +178,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     existing: IdempotencyRecord,
     fingerprint: string | undefined,
     res: ResponseShape,
+    opts: ResolvedOptions,
   ): Observable<unknown> {
     // Fingerprint mismatch takes priority over PROCESSING state —
     // IETF draft semantics (key reused with different payload → 422).
@@ -199,6 +208,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (typeof existing.statusCode === 'number') {
       res.status(existing.statusCode);
     }
+    replayStoredHeaders(res, existing.responseHeaders, opts.replayHeaders);
     const body =
       existing.responseBody !== undefined
         ? JSON.parse(existing.responseBody)
@@ -242,7 +252,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
                     ),
                 );
               }
-              return this.handleExistingRecord(raced, fingerprint, res);
+              return this.handleExistingRecord(raced, fingerprint, res, opts);
             }),
           );
         }
@@ -250,7 +260,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
         return next.handle().pipe(
           concatMap((value) =>
-            this.captureResponse(scopedKey, token, value, res, opts.ttl),
+            this.captureResponse(scopedKey, token, value, res, opts),
           ),
           catchError((err) =>
             // Handler failure ONLY — captureResponse is total and never
@@ -297,7 +307,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     token: string,
     value: unknown,
     res: ResponseShape,
-    ttl: number,
+    opts: ResolvedOptions,
   ): Observable<unknown> {
     // Guard #1: non-replayable response types (Buffer, streams, etc.)
     if (!IdempotencyInterceptor.isReplayable(value)) {
@@ -338,12 +348,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     const statusCode = res.statusCode ?? 200;
+    const headers = captureReplayHeaders(res, opts.replayHeaders);
     return from(
       this.storage.complete(
         scopedKey,
         token,
-        { statusCode, body: serialized },
-        ttl,
+        { statusCode, body: serialized, headers },
+        opts.ttl,
       ),
     ).pipe(
       map((result) => {
@@ -391,6 +402,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         metadata.fingerprint ?? this.moduleOptions.fingerprint ?? true,
       headerName: this.moduleOptions.headerName ?? DEFAULT_HEADER_NAME,
       scope: this.moduleOptions.scope ?? 'endpoint',
+      replayHeaders: this.moduleOptions.replayHeaders ?? true,
     };
   }
 

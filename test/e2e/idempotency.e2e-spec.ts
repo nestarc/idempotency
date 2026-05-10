@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Module,
   Post,
+  Res,
   UseInterceptors,
   type INestApplication,
 } from '@nestjs/common';
@@ -30,6 +31,21 @@ class PaymentsController {
   create(@Body() dto: { amount: number }) {
     callCounter.create += 1;
     return { id: `pay_${callCounter.create}`, kind: 'payment', amount: dto.amount };
+  }
+
+  @Post('with-headers')
+  @HttpCode(201)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
+  withHeaders(
+    @Body() dto: { amount: number },
+    @Res({ passthrough: true })
+    res: { setHeader(name: string, value: string): void },
+  ) {
+    callCounter.create += 1;
+    res.setHeader('Location', `/payments/pay_header_${callCounter.create}`);
+    res.setHeader('X-Request-Id', `req_header_${callCounter.create}`);
+    return { id: `pay_header_${callCounter.create}`, amount: dto.amount };
   }
 
   @Post('refund')
@@ -203,6 +219,29 @@ describe('Idempotency (e2e)', () => {
     expect(second.status).toBe(202);
     expect(second.body).toEqual(first.body);
     expect(callCounter.refund).toBe(1);
+  });
+
+  it('replays safe response headers on duplicate requests', async () => {
+    const first = await request(app.getHttpServer())
+      .post('/payments/with-headers')
+      .set('Idempotency-Key', 'header-key')
+      .send({ amount: 100 });
+
+    expect(first.status).toBe(201);
+    expect(first.body).toEqual({ id: 'pay_header_1', amount: 100 });
+    expect(first.headers.location).toBe('/payments/pay_header_1');
+    expect(first.headers['x-request-id']).toBe('req_header_1');
+
+    const second = await request(app.getHttpServer())
+      .post('/payments/with-headers')
+      .set('Idempotency-Key', 'header-key')
+      .send({ amount: 100 });
+
+    expect(second.status).toBe(201);
+    expect(second.body).toEqual(first.body);
+    expect(second.headers.location).toBe('/payments/pay_header_1');
+    expect(second.headers['x-request-id']).toBe('req_header_1');
+    expect(callCounter.create).toBe(1);
   });
 
   // P1 #2 regression: two different endpoints using the SAME Idempotency-Key

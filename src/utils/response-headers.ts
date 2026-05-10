@@ -62,8 +62,9 @@ export function captureReplayHeaders(
 export function replayStoredHeaders(
   res: HeaderReplayResponse,
   headers?: Record<string, string>,
+  option: ReplayHeadersOption = true,
 ): void {
-  if (!headers) {
+  if (!headers || option === false) {
     return;
   }
 
@@ -72,9 +73,13 @@ export function replayStoredHeaders(
     return;
   }
 
+  const explicitAllowlist = Array.isArray(option)
+    ? new Set(option.map((name) => name.toLowerCase()))
+    : undefined;
+
   for (const [rawName, value] of Object.entries(headers)) {
     const name = rawName.toLowerCase();
-    if (!isDeniedHeader(name)) {
+    if (!isDeniedHeader(name) && isAllowedHeader(name, explicitAllowlist)) {
       setHeader.call(res, name, value);
     }
   }
