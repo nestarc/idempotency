@@ -750,8 +750,8 @@ describe('IdempotencyInterceptor', () => {
     class PaymentsController {}
     class RefundsController {}
 
-    // Default = 'endpoint': the interceptor prepends class#method:: to the key.
-    it('scope=endpoint prefixes storage keys with ClassName#methodName::', async () => {
+    // Default = 'endpoint': the interceptor prepends method + actual path.
+    it('scope=endpoint prefixes storage keys with HTTP method and actual request path', async () => {
       const { interceptor, storage } = buildInterceptor({ scope: 'endpoint' });
       const handler = decoratedHandler({ enabled: true });
       // Override the function name to make the assertion deterministic.
@@ -759,6 +759,8 @@ describe('IdempotencyInterceptor', () => {
       const { context } = buildExecutionContext({
         req: {
           method: 'POST',
+          originalUrl: '/orders/123/capture?verbose=true',
+          url: '/orders/:id/capture',
           headers: { 'idempotency-key': 'shared-key' },
           body: { v: 1 },
         },
@@ -770,7 +772,101 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'PaymentsController#createHandler::shared-key',
+        'POST /orders/123/capture::shared-key',
+        expect.any(String),
+        86_400,
+      );
+    });
+
+    it('same route template with different actual path params uses distinct scoped keys', async () => {
+      const { interceptor, storage } = buildInterceptor({ scope: 'endpoint' });
+      const handler = decoratedHandler({ enabled: true });
+      Object.defineProperty(handler, 'name', { value: 'captureHandler' });
+      Reflect.defineMetadata('path', 'orders', PaymentsController);
+      Reflect.defineMetadata('path', ':id/capture', handler);
+
+      const firstCtx = buildExecutionContext({
+        req: {
+          method: 'POST',
+          originalUrl: '/orders/1/capture',
+          headers: { 'idempotency-key': 'shared-key' },
+          body: { amount: 100 },
+        },
+        handler,
+        controller: PaymentsController,
+      });
+      await firstValueFrom(
+        interceptor.intercept(
+          firstCtx.context,
+          buildCallHandler(of({ id: 'cap_1' })),
+        ),
+      );
+
+      const secondCtx = buildExecutionContext({
+        req: {
+          method: 'POST',
+          originalUrl: '/orders/2/capture',
+          headers: { 'idempotency-key': 'shared-key' },
+          body: { amount: 100 },
+        },
+        handler,
+        controller: PaymentsController,
+      });
+      const secondResult = await firstValueFrom(
+        interceptor.intercept(
+          secondCtx.context,
+          buildCallHandler(of({ id: 'cap_2' })),
+        ),
+      );
+
+      expect(secondResult).toEqual({ id: 'cap_2' });
+      const createCalls = storage.create.mock.calls.map(([key]) => key);
+      expect(createCalls).toContain('POST /orders/1/capture::shared-key');
+      expect(createCalls).toContain('POST /orders/2/capture::shared-key');
+    });
+
+    it('ignores query strings when scoping endpoint keys', async () => {
+      const { interceptor, storage } = buildInterceptor({ scope: 'endpoint' });
+      const handler = decoratedHandler({ enabled: true });
+
+      const firstCtx = buildExecutionContext({
+        req: {
+          method: 'POST',
+          originalUrl: '/search?a=1',
+          headers: { 'idempotency-key': 'query-key' },
+          body: { q: 'shoes' },
+        },
+        handler,
+        controller: PaymentsController,
+      });
+      await firstValueFrom(
+        interceptor.intercept(
+          firstCtx.context,
+          buildCallHandler(of({ result: 'first' })),
+        ),
+      );
+
+      const secondCtx = buildExecutionContext({
+        req: {
+          method: 'POST',
+          originalUrl: '/search?b=2',
+          headers: { 'idempotency-key': 'query-key' },
+          body: { q: 'shoes' },
+        },
+        handler,
+        controller: PaymentsController,
+      });
+      const secondResult = await firstValueFrom(
+        interceptor.intercept(
+          secondCtx.context,
+          buildCallHandler(of({ result: 'second' })),
+        ),
+      );
+
+      expect(secondResult).toEqual({ result: 'first' });
+      expect(storage.create).toHaveBeenCalledTimes(1);
+      expect(storage.create).toHaveBeenCalledWith(
+        'POST /search::query-key',
         expect.any(String),
         86_400,
       );

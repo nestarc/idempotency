@@ -3,6 +3,8 @@ import { Observable, of } from 'rxjs';
 
 export interface FakeRequest {
   method: string;
+  originalUrl?: string;
+  url?: string;
   headers: Record<string, string | undefined>;
   body: unknown;
 }

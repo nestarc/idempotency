@@ -29,6 +29,7 @@ import {
   IDEMPOTENCY_STORAGE,
   IDEMPOTENT_METADATA_KEY,
 } from './idempotency.constants';
+import { extractActualRequestPath } from './utils/request-scope';
 import { stableJsonStringify } from './utils/stable-json';
 import type {
   IdempotencyOptions,
@@ -115,6 +116,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
     const http = context.switchToHttp();
     const req = http.getRequest<{
+      method?: string;
+      originalUrl?: string;
+      url?: string;
       headers: Record<string, string | string[] | undefined>;
       body: unknown;
     }>();
@@ -394,12 +398,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * Derives the namespaced storage key from the raw header value according
    * to the configured {@link IdempotencyScope}.
    *
-   * For `scope: 'endpoint'` (the default), the interceptor attempts to read
-   * the real route path via NestJS's `PATH_METADATA` (set by `@Controller`
-   * and `@Get`/`@Post`/etc.) so the storage key is scoped by the actual
-   * HTTP method + URI — matching the IETF draft recommendation and
-   * surviving class-name collisions across modules (e.g. v1 vs v2
-   * controllers that happen to share a class name).
+   * For `scope: 'endpoint'` (the default), the interceptor first scopes by
+   * the platform request's actual HTTP method + path. Express's
+   * `req.originalUrl` wins, Fastify-style `req.url` is the fallback, query
+   * strings are ignored, and duplicate/trailing slashes are normalized.
+   *
+   * If no actual request path is available, it falls back to NestJS route
+   * template metadata (`PATH_METADATA` set by `@Controller` and
+   * `@Get`/`@Post`/etc.) so existing non-platform test fixtures and custom
+   * contexts keep stable endpoint scoping.
    *
    * If `PATH_METADATA` is unavailable (custom decorators, non-NestJS
    * controllers, or test fixtures without metadata), it falls back to the
@@ -428,8 +435,20 @@ export class IdempotencyInterceptor implements NestInterceptor {
   private computeEndpointScope(context: ExecutionContext): string {
     const controller = context.getClass();
     const handler = context.getHandler();
+    const req = context.switchToHttp().getRequest<{
+      method?: string;
+      originalUrl?: string;
+      url?: string;
+    }>();
+    const httpMethod = (req?.method ?? 'UNKNOWN').toUpperCase();
+    const actualPath = extractActualRequestPath(req);
 
-    // Attempt HTTP-route scoping first. Both pieces of path metadata are
+    if (actualPath) {
+      return `${httpMethod} ${actualPath}`;
+    }
+
+    // If no platform request path is available, use Nest route metadata.
+    // Both pieces of path metadata are
     // stamped by NestJS controller/method decorators — reader is safe to
     // use even when the metadata is absent (it returns undefined).
     const controllerPath = this.reflector.get<string | undefined>(
@@ -442,8 +461,6 @@ export class IdempotencyInterceptor implements NestInterceptor {
     );
 
     if (controllerPath !== undefined && handlerPath !== undefined) {
-      const req = context.switchToHttp().getRequest<{ method?: string }>();
-      const httpMethod = (req?.method ?? 'UNKNOWN').toUpperCase();
       // Normalize slashes: collapse duplicates, ensure single leading slash.
       const joined = `/${controllerPath}/${handlerPath}`
         .replace(/\/+/g, '/')

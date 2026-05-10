@@ -19,7 +19,7 @@ import { Idempotent } from '../../src/idempotency.decorator';
 import { MemoryStorage } from '../../src/storage/memory.storage';
 
 /** Counter that lets us verify the handler ran exactly once across replays. */
-const callCounter = { create: 0, refund: 0, fail: 0, cross: 0 };
+const callCounter = { create: 0, refund: 0, fail: 0, cross: 0, capture: 0 };
 
 @Controller('payments')
 class PaymentsController {
@@ -39,6 +39,19 @@ class PaymentsController {
   refund(@Body() dto: { id: string }) {
     callCounter.refund += 1;
     return { refundId: `rfd_${callCounter.refund}`, paymentId: dto.id };
+  }
+
+  @Post(':id/capture')
+  @HttpCode(201)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
+  capture(@Body() dto: { amount: number }) {
+    callCounter.capture += 1;
+    return {
+      id: `cap_${callCounter.capture}`,
+      kind: 'capture',
+      amount: dto.amount,
+    };
   }
 
   @Post('failing')
@@ -99,6 +112,7 @@ describe('Idempotency (e2e)', () => {
     callCounter.refund = 0;
     callCounter.fail = 0;
     callCounter.cross = 0;
+    callCounter.capture = 0;
   });
 
   it('processes a first request normally and returns 201', async () => {
@@ -230,6 +244,33 @@ describe('Idempotency (e2e)', () => {
       .send({ amount: 100 });
     expect(transferAgain.body).toEqual(transfer.body);
     expect(callCounter.cross).toBe(1); // still 1
+  });
+
+  it('scopes endpoint keys by actual path params on capture routes', async () => {
+    const first = await request(app.getHttpServer())
+      .post('/payments/pay_1/capture')
+      .set('Idempotency-Key', 'capture-key')
+      .send({ amount: 100 });
+
+    expect(first.status).toBe(201);
+    expect(first.body).toEqual({
+      id: 'cap_1',
+      kind: 'capture',
+      amount: 100,
+    });
+
+    const second = await request(app.getHttpServer())
+      .post('/payments/pay_2/capture')
+      .set('Idempotency-Key', 'capture-key')
+      .send({ amount: 100 });
+
+    expect(second.status).toBe(201);
+    expect(second.body).toEqual({
+      id: 'cap_2',
+      kind: 'capture',
+      amount: 100,
+    });
+    expect(callCounter.capture).toBe(2);
   });
 
   // Concurrency regression: two identical requests fired simultaneously
