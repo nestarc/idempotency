@@ -92,8 +92,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "overrides": {
-    "fastify": "5.8.5"
   }
 }
