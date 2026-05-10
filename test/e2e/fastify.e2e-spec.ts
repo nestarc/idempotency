@@ -14,7 +14,6 @@ import {
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import type { FastifyReply } from 'fastify';
 import request from 'supertest';
 
 import { Idempotent } from '../../src/idempotency.decorator';
@@ -41,7 +40,8 @@ class FastifyPaymentsController {
   @UseInterceptors(IdempotencyInterceptor)
   withHeaders(
     @Body() dto: { amount: number },
-    @Res({ passthrough: true }) reply: FastifyReply,
+    @Res({ passthrough: true })
+    reply: { header: (name: string, value: string) => unknown },
   ) {
     calls.headers += 1;
     reply.header('Location', `/fastify-payments/fp_header_${calls.headers}`);
