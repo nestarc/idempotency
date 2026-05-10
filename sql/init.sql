@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
   status         TEXT        NOT NULL CHECK (status IN ('PROCESSING', 'COMPLETED')),
   response_code  INT,
   response_body  TEXT,
+  response_headers JSONB,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at     TIMESTAMPTZ NOT NULL
 );

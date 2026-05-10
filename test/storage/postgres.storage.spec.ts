@@ -72,9 +72,9 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
     // they are cleared by the ON CONFLICT DO UPDATE branch.
     await pool.query(
       `INSERT INTO "${TABLE_NAME}"
-         (key, token, fingerprint, status, response_code, response_body, expires_at)
+         (key, token, fingerprint, status, response_code, response_body, response_headers, expires_at)
        VALUES ('expired-key', gen_random_uuid(), 'old-fp', 'COMPLETED',
-               200, '{"prior":"body"}', now() - interval '1 second')`,
+               200, '{"prior":"body"}', '{"x-old":"1"}'::jsonb, now() - interval '1 second')`,
     );
 
     const result = await storage.create('expired-key', 'new-fp', 60);
@@ -88,6 +88,20 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
     // Cleared on replacement (was 200 / '{"prior":"body"}' before).
     expect(row!.statusCode).toBeUndefined();
     expect(row!.responseBody).toBeUndefined();
+    expect(row!.responseHeaders).toBeUndefined();
+  });
+
+  it('createSchema() creates the response_headers JSONB column', async () => {
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
+
+    const result = await pool.query<{ data_type: string }>(
+      `SELECT data_type
+         FROM information_schema.columns
+        WHERE table_name = $1 AND column_name = 'response_headers'`,
+      [TABLE_NAME],
+    );
+
+    expect(result.rows[0].data_type).toBe('jsonb');
   });
 
   it('createSchema() is idempotent — calling twice does not throw', async () => {
