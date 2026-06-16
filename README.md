@@ -1,6 +1,6 @@
 # @nestarc/idempotency
 
-> IETF-draft-compliant idempotency module for NestJS — decorator-based, pluggable storage (memory/Redis/Postgres), response replay, fingerprint validation.
+> IETF draft-07-compatible idempotency module for NestJS — decorator-based, pluggable storage (memory/Redis/Postgres), response replay, fingerprint validation, processing leases, and observability hooks.
 
 [![CI](https://github.com/nestarc/idempotency/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nestarc/idempotency/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@nestarc/idempotency.svg)](https://www.npmjs.com/package/@nestarc/idempotency)
@@ -18,9 +18,9 @@ Non-idempotent HTTP methods (`POST`, `PATCH`, `DELETE`) can be processed multipl
 - A flaky mobile network resends a request without realizing the first attempt succeeded
 - Microservices duplicate messages between hops
 
-The result is double charges, duplicate orders, and corrupt state. The IETF draft [`httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) standardizes a solution: clients send an `Idempotency-Key` header with a unique value, and the server enforces "exactly-once" semantics by replaying the original response on retries.
+The result is double charges, duplicate orders, and corrupt state. The IETF draft [`httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) describes a solution: clients send an `Idempotency-Key` header with a unique value, and the server makes retries safe by replaying the original response when the original request completed.
 
-`@nestarc/idempotency` is a clean-room NestJS implementation of that draft, with a one-line decorator API and pluggable storage.
+`@nestarc/idempotency` is a clean-room NestJS implementation of that draft-compatible behavior, with a one-line decorator API and pluggable storage. It does not claim full exactly-once execution across your business database transaction; it protects the HTTP mutation boundary and uses token-CAS storage records to prevent stale writers from clobbering newer records.
 
 ## Install
 
@@ -245,15 +245,19 @@ SELECT cron.schedule('idempotency-sweep', '* * * * *',
 
 ### Module options (`IdempotencyModule.forRoot(...)`)
 
-| Option          | Type                  | Default             | Description                                                                         |
-| --------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------- |
-| `storage`       | `IdempotencyStorage`  | (required)          | A storage adapter instance (e.g. `new MemoryStorage()`).                            |
-| `ttl`           | `number` (seconds)    | `86400`             | Default time-to-live for records. Per-handler can override.                         |
-| `headerName`    | `string`              | `'Idempotency-Key'` | HTTP header carrying the key. Defaults to the IETF standard.                        |
-| `fingerprint`   | `boolean`             | `true`              | Compute a SHA-256 fingerprint of the request body.                                  |
-| `scope`         | `IdempotencyScope`    | `'endpoint'`        | How storage keys are namespaced. See [Scope](#scope) below.                         |
-| `replayHeaders` | `boolean \| string[]` | `true`              | Replay the default safe allowlist, an explicit allowlist, or disable header replay. |
-| `isGlobal`      | `boolean`             | `true`              | Register as a NestJS global module.                                                 |
+| Option          | Type                                           | Default             | Description                                                                         |
+| --------------- | ---------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------- |
+| `storage`       | `IdempotencyStorage`                           | (required)          | A storage adapter instance (e.g. `new MemoryStorage()`).                            |
+| `ttl`           | `number` (seconds)                             | `86400`             | Completed replay record TTL. Per-handler can override.                              |
+| `processingTtl` | `number` (seconds)                             | same as `ttl`       | Optional in-flight PROCESSING record TTL.                                           |
+| `headerName`    | `string`                                       | `'Idempotency-Key'` | HTTP header carrying the key. Defaults to the IETF draft header name.               |
+| `keyResolver`   | `(ctx) => string \| undefined \| Promise<...>` | header lookup       | Resolve keys from webhook event ids, command ids, or other application values.      |
+| `maxKeyLength`  | `number`                                       | `255`               | Maximum accepted key length.                                                        |
+| `fingerprint`   | `boolean \| resolver`                          | `true`              | Compute a SHA-256 body fingerprint or provide a semantic custom fingerprint.         |
+| `scope`         | `IdempotencyScope`                             | `'endpoint'`        | How storage keys are namespaced. See [Scope](#scope) below.                         |
+| `replayHeaders` | `boolean \| string[]`                          | `true`              | Replay the default safe allowlist, an explicit allowlist, or disable header replay. |
+| `observability` | `{ onEvent?, exposeStatusHeaders? }`           | status headers on   | Emit outcome events and expose `Idempotency-Status` headers.                        |
+| `isGlobal`      | `boolean`                                      | `true`              | Register as a NestJS global module.                                                 |
 
 #### Scope
 
@@ -278,11 +282,81 @@ IdempotencyModule.forRoot({
 
 ### Decorator options (`@Idempotent(options?)`)
 
-| Option        | Type      | Default | Description                                                                             |
-| ------------- | --------- | ------- | --------------------------------------------------------------------------------------- |
-| `required`    | `boolean` | `true`  | If true and the header is missing, the interceptor returns 400. If false, pass-through. |
-| `ttl`         | `number`  | inherit | Override the module-level TTL for this handler (seconds).                               |
-| `fingerprint` | `boolean` | inherit | Override the module-level fingerprint setting.                                          |
+| Option          | Type                  | Default | Description                                                                             |
+| --------------- | --------------------- | ------- | --------------------------------------------------------------------------------------- |
+| `required`      | `boolean`             | `true`  | If true and no key is resolved, the interceptor returns 400. If false, pass-through.    |
+| `ttl`           | `number`              | inherit | Override the module-level completed replay TTL for this handler.                        |
+| `processingTtl` | `number`              | inherit | Override the module-level in-flight processing TTL for this handler.                    |
+| `keyResolver`   | key resolver function | inherit | Override module-level key resolution for this handler.                                  |
+| `maxKeyLength`  | `number`              | inherit | Override module-level key length validation for this handler.                           |
+| `fingerprint`   | `boolean \| resolver` | inherit | Override the module-level fingerprint setting or resolver.                              |
+
+### Processing leases
+
+By default, `PROCESSING` records and completed replay records use the same
+`ttl`. For long replay windows, you can use a shorter `processingTtl` so stuck
+in-flight records expire sooner after a crash:
+
+```ts
+IdempotencyModule.forRoot({
+  storage: new RedisStorage(redis),
+  ttl: 86400,        // replay completed responses for 24 hours
+  processingTtl: 60, // release stuck in-flight records after 60 seconds
+});
+```
+
+Choose `processingTtl` above the endpoint's real p99 processing time. Too-short
+processing leases can allow a retry to acquire the key while the original
+request is still running.
+
+### Custom key and fingerprint resolvers
+
+Use `keyResolver` when the stable key comes from a webhook event id or command
+id instead of the `Idempotency-Key` header:
+
+```ts
+@Post('webhooks/stripe')
+@Idempotent({
+  keyResolver: (ctx) => {
+    const req = ctx.switchToHttp().getRequest<{ body: { id: string } }>();
+    return req.body.id;
+  },
+  fingerprint: ({ body }) => {
+    const event = body as { type: string; data: { object: { id: string } } };
+    return `${event.type}:${event.data.object.id}`;
+  },
+})
+handleStripeWebhook(@Body() event: StripeEvent) {
+  return this.webhookService.process(event);
+}
+```
+
+The boolean `fingerprint` behavior remains unchanged. A custom resolver replaces
+the default body hash and should return a deterministic semantic fingerprint.
+
+### Observability
+
+v0.4 emits optional outcome events and status headers:
+
+```ts
+IdempotencyModule.forRoot({
+  storage: new PostgresStorage(pool),
+  observability: {
+    onEvent: (event) => {
+      metrics.increment(`idempotency.${event.outcome}`);
+    },
+  },
+});
+```
+
+Status headers are enabled by default:
+
+- `Idempotency-Status: created`
+- `Idempotency-Status: replayed` plus `Idempotency-Replayed: true`
+- `Idempotency-Status: conflict`
+- `Idempotency-Status: mismatch`
+
+Set `observability: { exposeStatusHeaders: false }` to disable these headers.
 
 ### Response header replay
 
@@ -438,31 +512,36 @@ Then pass an instance to `IdempotencyModule.forRoot({ storage: new MyStorage() }
 
 The package ships a **shared contract test suite** at `test/support/shared-storage-contract.ts` (in the source tree, not exported) that encodes every behavioral guarantee above. Custom adapters are encouraged to copy it into their own repo and plug in via `describeStorageContract('MyStorage', factory)` to catch LSP drift before it ships.
 
-## IETF spec compliance
+## IETF draft-compatible profile
 
-This package targets [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). As of v0.3.0 it covers:
+This package targets the behavior described by [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). The draft is not a final RFC, so the package documents its supported profile explicitly. As of v0.4.0 it covers:
 
 - ✅ `Idempotency-Key` header recognition (configurable name)
+- ✅ Custom application key resolvers for webhook event ids and command ids
 - ✅ Atomic key creation with NX semantics (built-in adapters)
 - ✅ **Token-based compare-and-set** on every mutation — a slow caller whose record was evicted by TTL cannot clobber a newer caller's record
 - ✅ Response replay for completed requests (matching fingerprint)
 - ✅ **409 Conflict** only when the winner is genuinely still in flight (not for lost races against already-completed winners)
 - ✅ **422 Unprocessable Entity** for fingerprint mismatch — priority over PROCESSING state per draft semantics
-- ✅ Configurable TTL with per-endpoint override and boundary validation (positive integer only)
+- ✅ Configurable completed replay TTL and optional processing TTL with boundary validation (positive integer only)
 - ✅ **Per-endpoint key scoping by actual request path** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /actual/path::rawKey`, excluding the query string to avoid accidental key drift
 - ✅ Binary response detection — Buffer, typed arrays, and Node/Web streams are bypassed rather than cached as JSON garbage
 - ✅ Safe response header replay for `Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers
+- ✅ Outcome observability via `onEvent` and `Idempotency-Status` headers
 - ✅ **Transient storage-write failures** do NOT cause duplicate execution — a failing `complete()` is caught and the handler's response is still emitted to the caller
 
 Deferred to future versions:
 
 - 🚧 Transactional integration (`@TransactionalIdempotent`)
 - 🚧 Dual ESM/CJS build
-- 🚧 Custom fingerprint functions and metrics
+- 🚧 Business-error caching option
+- 🚧 Swagger/OpenAPI integration
 
 ## Caveats
 
 - **Body fingerprint uses stable JSON serialization.** Object keys are sorted recursively before hashing, so semantically equivalent JSON objects with different key order produce the same fingerprint. Array order remains significant.
+- **Custom fingerprints are caller-defined.** A resolver must be deterministic for the same semantic request. Non-deterministic values such as timestamps or random ids will cause false 422 mismatches.
+- **Processing TTL is a lease, not a transaction.** A short `processingTtl` helps recover stuck records, but if it is shorter than real handler execution time, a retry can acquire the key while the first request is still running.
 - **Only plain-JSON responses are cached.** Buffers, typed arrays, Node streams, and Web `ReadableStream` are actively detected and bypass caching with a logged warning — the handler still runs and the caller still gets the response, but there is no replay for binary endpoints.
 - **TTL-expiry race is closed via token-based CAS.** A slow request whose PROCESSING record has been evicted by TTL cannot clobber a newer request's record under the same key — the storage refuses the write and the interceptor logs a `stale token` warning while still emitting the handler's response to the caller.
 
@@ -470,7 +549,8 @@ Deferred to future versions:
 
 - v0.2 (shipped): PostgreSQL storage adapter (`pg`), opt-in sweep service, bundled SQL DDL
 - v0.3 (shipped): Stable JSON fingerprinting, safe response header replay, Fastify verification, real Redis smoke coverage, hardened release validation
-- v0.4: Transactional integration (`@TransactionalIdempotent`), custom fingerprint functions, metrics (hit rate, conflict rate), business-error caching option, Swagger/OpenAPI integration
+- v0.4 (in progress): Processing leases, custom key resolvers, custom fingerprint resolvers, observability events/status headers, draft-compatible documentation cleanup
+- v0.5 candidates: Transactional integration (`@TransactionalIdempotent`), business-error caching option, Swagger/OpenAPI integration, service-level idempotency helpers
 
 ## License
 

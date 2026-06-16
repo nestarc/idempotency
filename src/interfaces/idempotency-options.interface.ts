@@ -4,10 +4,11 @@ import type { IdempotencyStorage } from './idempotency-storage.interface';
 /**
  * How the interceptor derives the storage-key namespace from the request.
  *
- * - `'endpoint'` (default) — scope by controller class + handler method name.
- *   Two different endpoints using the SAME `Idempotency-Key` value will NOT
- *   collide. Matches the IETF draft recommendation that the key be unique
- *   per (key, request URI) tuple.
+ * - `'endpoint'` (default) — scope by actual HTTP method + request path when
+ *   available, falling back to Nest route metadata and then controller class +
+ *   handler method name. Two different endpoints using the SAME
+ *   `Idempotency-Key` value will NOT collide. Matches the IETF draft
+ *   recommendation that the key be unique per (key, request URI) tuple.
  *
  * - `'global'` — legacy behavior: use the raw header value as the storage
  *   key with no namespace. Safe only if clients guarantee globally-unique
@@ -25,6 +26,54 @@ export type IdempotencyScope =
 export type ReplayHeadersOption = boolean | string[];
 
 /**
+ * Resolves the idempotency key for a request. Use this when the stable key
+ * comes from a webhook event id, command id, or other application-level value
+ * instead of the configured HTTP header.
+ */
+export type IdempotencyKeyResolver = (
+  context: ExecutionContext,
+) => string | undefined | Promise<string | undefined>;
+
+export interface IdempotencyFingerprintInput {
+  context: ExecutionContext;
+  key: string;
+  scope: string;
+  body: unknown;
+  defaultFingerprint: () => string | undefined;
+}
+
+/**
+ * Resolves the fingerprint used to detect reuse of the same idempotency key
+ * with a semantically different request.
+ */
+export type IdempotencyFingerprintResolver = (
+  input: IdempotencyFingerprintInput,
+) => string | undefined | Promise<string | undefined>;
+
+export type IdempotencyOutcome =
+  | 'created'
+  | 'replayed'
+  | 'conflict'
+  | 'mismatch'
+  | 'bypassed'
+  | 'stale'
+  | 'complete_error'
+  | 'storage_error';
+
+export interface IdempotencyEvent {
+  outcome: IdempotencyOutcome;
+  keyHash: string;
+  scope: string;
+  statusCode?: number;
+  error?: unknown;
+}
+
+export interface IdempotencyObservabilityOptions {
+  onEvent?: (event: IdempotencyEvent) => void | Promise<void>;
+  exposeStatusHeaders?: boolean;
+}
+
+/**
  * Module-level configuration passed to {@link IdempotencyModule.forRoot}.
  */
 export interface IdempotencyOptions {
@@ -38,10 +87,23 @@ export interface IdempotencyOptions {
   /**
    * Default time-to-live for idempotency records, in seconds.
    * Per-handler `@Idempotent({ ttl })` overrides this.
+   * Completed replay records use this TTL. In-flight PROCESSING records also
+   * use this TTL unless {@link processingTtl} is configured.
    *
    * @default 86400 (24 hours)
    */
   ttl?: number;
+
+  /**
+   * Optional time-to-live for in-flight PROCESSING records, in seconds.
+   * When omitted, {@link ttl} is used for both processing locks and completed
+   * replay records. Per-handler `@Idempotent({ processingTtl })` overrides this.
+   *
+   * Configure this only when you want stuck in-flight records to expire sooner
+   * than completed replay records. Values shorter than the endpoint's real
+   * processing time can allow duplicate execution.
+   */
+  processingTtl?: number;
 
   /**
    * The HTTP header name carrying the idempotency key. Override only if you
@@ -52,12 +114,26 @@ export interface IdempotencyOptions {
   headerName?: string;
 
   /**
+   * Optional application-level idempotency key resolver. When configured, its
+   * return value is used instead of reading the configured header.
+   */
+  keyResolver?: IdempotencyKeyResolver;
+
+  /**
+   * Maximum accepted idempotency key length, in characters.
+   *
+   * @default 255
+   */
+  maxKeyLength?: number;
+
+  /**
    * When true, the interceptor computes a SHA-256 fingerprint of the request body
-   * and verifies it on subsequent requests. A mismatch produces HTTP 422.
+   * and verifies it on subsequent requests. Pass a resolver function to provide
+   * an application-specific semantic fingerprint. A mismatch produces HTTP 422.
    *
    * @default true
    */
-  fingerprint?: boolean;
+  fingerprint?: boolean | IdempotencyFingerprintResolver;
 
   /**
    * How storage keys are namespaced. See {@link IdempotencyScope}.
@@ -77,6 +153,11 @@ export interface IdempotencyOptions {
    * @default true
    */
   replayHeaders?: ReplayHeadersOption;
+
+  /**
+   * Optional operational hooks and client-visible status headers.
+   */
+  observability?: IdempotencyObservabilityOptions;
 
   /**
    * When true, the module is registered as a global module (no need to import
@@ -129,9 +210,24 @@ export interface IdempotentOptions {
   ttl?: number;
 
   /**
+   * Override the module-level processing TTL for this handler (in seconds).
+   */
+  processingTtl?: number;
+
+  /**
+   * Override the module-level key resolver for this handler.
+   */
+  keyResolver?: IdempotencyKeyResolver;
+
+  /**
+   * Override the module-level maximum key length for this handler.
+   */
+  maxKeyLength?: number;
+
+  /**
    * Override the module-level fingerprint setting for this handler.
    */
-  fingerprint?: boolean;
+  fingerprint?: boolean | IdempotencyFingerprintResolver;
 }
 
 /**

@@ -4,6 +4,28 @@ All notable changes to `@nestarc/idempotency` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-16
+
+### Added
+
+- Added `processingTtl` module and decorator option to separate in-flight
+  PROCESSING record leases from completed replay TTLs.
+- Added `keyResolver` and `maxKeyLength` options for webhook event ids,
+  command ids, and other application-level idempotency keys.
+- Added custom fingerprint resolver support while preserving the existing
+  boolean body-fingerprint API.
+- Added observability hooks via `observability.onEvent` with redacted key hashes.
+- Added `Idempotency-Status` and `Idempotency-Replayed` response headers, with
+  `observability.exposeStatusHeaders: false` as an opt-out.
+- Exported `PostgresStorage` from the storage barrel.
+
+### Changed
+
+- Updated documentation to describe the package as IETF draft-07-compatible
+  rather than final-RFC compliant.
+- Clarified that the package protects the HTTP mutation boundary and does not
+  guarantee full exactly-once execution across user business transactions.
+
 ## [0.3.0] - 2026-05-10
 
 ### Added

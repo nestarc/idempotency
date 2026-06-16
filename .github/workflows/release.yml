@@ -1,7 +1,14 @@
 name: Release
 
-# Publishes @nestarc/idempotency to npm when a tag matching `v*.*.*` is
-# pushed, or when the workflow is dispatched manually (emergency fallback).
+# Publishes @nestarc/idempotency to npm when a tag matching `v*.*.*` is pushed,
+# or when the workflow is dispatched manually.
+#
+# npm Trusted Publisher configuration:
+#   - Publisher: GitHub Actions
+#   - Repository: nestarc/idempotency
+#   - Workflow filename: release.yml
+#   - Environment name: npm
+#   - Allowed action: npm publish
 #
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag.
@@ -9,13 +16,8 @@ name: Release
 #   3. publish runs `npm publish --provenance --access public` and creates a
 #      GitHub Release with the CHANGELOG excerpt.
 #
-# Required secrets:
-#   - NPM_TOKEN — an Automation token scoped to publish rights on @nestarc/*.
-#                 Create at https://www.npmjs.com/settings/<user>/tokens and add
-#                 under repo Settings → Secrets and variables → Actions.
-#
 # Permissions:
-#   - id-token: write is required for `--provenance` OIDC signing.
+#   - id-token: write is required for npm Trusted Publishing and provenance.
 #   - contents: write is required to create the GitHub Release.
 #
 # Security notes:
@@ -139,6 +141,7 @@ jobs:
     name: Publish to npm
     needs: [verify, build-and-test]
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: write
       id-token: write
@@ -149,8 +152,8 @@ jobs:
       - name: Setup Node with npm registry
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: npm
+          # npm Trusted Publishing requires npm >= 11.5.1 and Node >= 22.14.0.
+          node-version: '24'
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
@@ -161,14 +164,10 @@ jobs:
 
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public --dry-run
 
       - name: Publish
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
 
       - name: Extract CHANGELOG entry for this version

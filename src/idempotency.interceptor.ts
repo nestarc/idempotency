@@ -39,6 +39,10 @@ import {
 import { stableJsonStringify } from './utils/stable-json';
 import type {
   IdempotencyOptions,
+  IdempotencyFingerprintResolver,
+  IdempotencyObservabilityOptions,
+  IdempotencyOutcome,
+  IdempotencyKeyResolver,
   IdempotencyScope,
   IdempotentMetadata,
   ReplayHeadersOption,
@@ -51,10 +55,22 @@ import type { IdempotencyStorage } from './interfaces/idempotency-storage.interf
 interface ResolvedOptions {
   required: boolean;
   ttl: number;
-  fingerprint: boolean;
+  processingTtl: number;
+  fingerprint: boolean | IdempotencyFingerprintResolver;
   headerName: string;
+  keyResolver: IdempotencyKeyResolver | undefined;
+  maxKeyLength: number;
   scope: IdempotencyScope;
   replayHeaders: ReplayHeadersOption | undefined;
+  observability: IdempotencyObservabilityOptions | undefined;
+}
+
+interface RequestShape {
+  method?: string;
+  originalUrl?: string;
+  url?: string;
+  headers: Record<string, string | string[] | undefined>;
+  body: unknown;
 }
 
 /**
@@ -123,41 +139,65 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return throwError(() => err);
     }
     const http = context.switchToHttp();
-    const req = http.getRequest<{
-      method?: string;
-      originalUrl?: string;
-      url?: string;
-      headers: Record<string, string | string[] | undefined>;
-      body: unknown;
-    }>();
+    const req = http.getRequest<RequestShape>();
     const res = http.getResponse<ResponseShape>();
 
-    const headerValue = req.headers[opts.headerName.toLowerCase()];
-    const rawKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-
-    if (!rawKey) {
-      if (opts.required) {
-        return throwError(
-          () =>
-            new BadRequestException(
-              `${opts.headerName} header is required for this endpoint`,
-            ),
-        );
-      }
-      return next.handle();
-    }
-
-    const scopedKey = this.applyScope(opts.scope, context, rawKey);
-    const fingerprint = opts.fingerprint
-      ? this.computeFingerprint(req.body)
-      : undefined;
-
-    return from(this.storage.get(scopedKey)).pipe(
-      switchMap((existing) => {
-        if (existing) {
-          return this.handleExistingRecord(existing, fingerprint, res, opts);
+    return from(this.resolveRawKey(opts, context, req)).pipe(
+      switchMap((rawKey) => {
+        if (!rawKey) {
+          if (opts.required) {
+            return throwError(
+              () =>
+                new BadRequestException(
+                  `${opts.headerName} header is required for this endpoint`,
+                ),
+            );
+          }
+          return next.handle();
         }
-        return this.acquireAndRun(scopedKey, fingerprint, opts, res, next);
+
+        if (rawKey.length > opts.maxKeyLength) {
+          return throwError(
+            () =>
+              new BadRequestException(
+                `${opts.headerName} must be ${opts.maxKeyLength} characters or fewer`,
+              ),
+          );
+        }
+
+        const scopedKey = this.applyScope(opts.scope, context, rawKey);
+        return from(
+          this.resolveFingerprint(opts, context, rawKey, scopedKey, req.body),
+        ).pipe(
+          switchMap((fingerprint) =>
+            from(this.storage.get(scopedKey)).pipe(
+              catchError((err) => {
+                this.emitEvent(opts, 'storage_error', scopedKey, {
+                  error: err,
+                });
+                return throwError(() => err);
+              }),
+              switchMap((existing) => {
+                if (existing) {
+                  return this.handleExistingRecord(
+                    existing,
+                    fingerprint,
+                    res,
+                    opts,
+                    scopedKey,
+                  );
+                }
+                return this.acquireAndRun(
+                  scopedKey,
+                  fingerprint,
+                  opts,
+                  res,
+                  next,
+                );
+              }),
+            ),
+          ),
+        );
       }),
     );
   }
@@ -179,6 +219,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     fingerprint: string | undefined,
     res: ResponseShape,
     opts: ResolvedOptions,
+    scopedKey: string,
   ): Observable<unknown> {
     // Fingerprint mismatch takes priority over PROCESSING state —
     // IETF draft semantics (key reused with different payload → 422).
@@ -187,6 +228,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
       fingerprint &&
       existing.fingerprint !== fingerprint
     ) {
+      this.setIdempotencyStatus(res, opts, 'mismatch');
+      this.emitEvent(opts, 'mismatch', scopedKey, {
+        statusCode: 422,
+      });
       return throwError(
         () =>
           new UnprocessableEntityException(
@@ -196,6 +241,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     if (existing.status === 'PROCESSING') {
+      this.setIdempotencyStatus(res, opts, 'conflict');
+      this.emitEvent(opts, 'conflict', scopedKey, {
+        statusCode: 409,
+      });
       return throwError(
         () =>
           new ConflictException(
@@ -209,6 +258,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
       res.status(existing.statusCode);
     }
     replayStoredHeaders(res, existing.responseHeaders, opts.replayHeaders);
+    this.setIdempotencyStatus(res, opts, 'replayed');
+    if (this.shouldExposeStatusHeaders(opts)) {
+      this.setHeader(res, 'Idempotency-Replayed', 'true');
+    }
+    this.emitEvent(opts, 'replayed', scopedKey, {
+      statusCode: existing.statusCode,
+    });
     const body =
       existing.responseBody !== undefined
         ? JSON.parse(existing.responseBody)
@@ -231,7 +287,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
     res: ResponseShape,
     next: CallHandler,
   ): Observable<unknown> {
-    return from(this.storage.create(scopedKey, fingerprint, opts.ttl)).pipe(
+    return from(this.storage.create(scopedKey, fingerprint, opts.processingTtl)).pipe(
+      catchError((err) => {
+        this.emitEvent(opts, 'storage_error', scopedKey, {
+          error: err,
+        });
+        return throwError(() => err);
+      }),
       switchMap((createResult) => {
         if (!createResult.acquired || !createResult.token) {
           // We lost the race — between our initial get() and this create(),
@@ -245,6 +307,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
           return from(this.storage.get(scopedKey)).pipe(
             switchMap((raced) => {
               if (!raced) {
+                this.setIdempotencyStatus(res, opts, 'conflict');
+                this.emitEvent(opts, 'conflict', scopedKey, {
+                  statusCode: 409,
+                });
                 return throwError(
                   () =>
                     new ConflictException(
@@ -252,7 +318,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
                     ),
                 );
               }
-              return this.handleExistingRecord(raced, fingerprint, res, opts);
+              return this.handleExistingRecord(
+                raced,
+                fingerprint,
+                res,
+                opts,
+                scopedKey,
+              );
             }),
           );
         }
@@ -314,6 +386,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
       this.logger.warn(
         `Response for key="${scopedKey}" is not a plain JSON value (type=${IdempotencyInterceptor.describeType(value)}); skipping cache`,
       );
+      this.setIdempotencyStatus(res, opts, 'bypassed');
+      this.emitEvent(opts, 'bypassed', scopedKey, {
+        statusCode: res.statusCode ?? 200,
+      });
       return from(this.storage.delete(scopedKey, token)).pipe(
         // Even the cleanup-delete is total — if it throws, emit the value
         // anyway. The handler already succeeded.
@@ -336,6 +412,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
       this.logger.warn(
         `Response for key="${scopedKey}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
       );
+      this.setIdempotencyStatus(res, opts, 'bypassed');
+      this.emitEvent(opts, 'bypassed', scopedKey, {
+        statusCode: res.statusCode ?? 200,
+        error: err,
+      });
       return from(this.storage.delete(scopedKey, token)).pipe(
         catchError((delErr) => {
           this.logger.warn(
@@ -365,6 +446,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
           this.logger.warn(
             `Stale token when completing key="${scopedKey}" — response not cached (likely TTL eviction race)`,
           );
+          this.setIdempotencyStatus(res, opts, 'stale');
+          this.emitEvent(opts, 'stale', scopedKey, {
+            statusCode,
+          });
+        } else {
+          this.setIdempotencyStatus(res, opts, 'created');
+          this.emitEvent(opts, 'created', scopedKey, {
+            statusCode,
+          });
         }
         return value;
       }),
@@ -377,6 +467,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
         this.logger.error(
           `storage.complete() threw for key="${scopedKey}": ${(err as Error).message}. Handler succeeded; emitting value without cache. Retries will see 409 until TTL expires.`,
         );
+        this.setIdempotencyStatus(res, opts, 'complete_error');
+        this.emitEvent(opts, 'complete_error', scopedKey, {
+          statusCode,
+          error: err,
+        });
         return of(value);
       }),
     );
@@ -395,15 +490,72 @@ export class IdempotencyInterceptor implements NestInterceptor {
         `IdempotencyInterceptor: ttl must be a positive integer number of seconds, received ${String(ttl)}`,
       );
     }
+    const processingTtl =
+      metadata.processingTtl ?? this.moduleOptions.processingTtl ?? ttl;
+    if (
+      typeof processingTtl !== 'number' ||
+      !Number.isFinite(processingTtl) ||
+      !Number.isInteger(processingTtl) ||
+      processingTtl <= 0
+    ) {
+      throw new Error(
+        `IdempotencyInterceptor: processingTtl must be a positive integer number of seconds, received ${String(processingTtl)}`,
+      );
+    }
     return {
       required: metadata.required ?? true,
       ttl,
+      processingTtl,
       fingerprint:
         metadata.fingerprint ?? this.moduleOptions.fingerprint ?? true,
       headerName: this.moduleOptions.headerName ?? DEFAULT_HEADER_NAME,
+      keyResolver:
+        metadata.keyResolver ?? this.moduleOptions.keyResolver,
+      maxKeyLength:
+        metadata.maxKeyLength ?? this.moduleOptions.maxKeyLength ?? 255,
       scope: this.moduleOptions.scope ?? 'endpoint',
       replayHeaders: this.moduleOptions.replayHeaders ?? true,
+      observability: this.moduleOptions.observability,
     };
+  }
+
+  private async resolveRawKey(
+    opts: ResolvedOptions,
+    context: ExecutionContext,
+    req: RequestShape,
+  ): Promise<string | undefined> {
+    if (opts.keyResolver) {
+      return opts.keyResolver(context);
+    }
+    const headerValue = req.headers[opts.headerName.toLowerCase()];
+    return Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  }
+
+  private async resolveFingerprint(
+    opts: ResolvedOptions,
+    context: ExecutionContext,
+    rawKey: string,
+    scopedKey: string,
+    body: unknown,
+  ): Promise<string | undefined> {
+    if (opts.fingerprint === false) {
+      return undefined;
+    }
+
+    const defaultFingerprint = (): string | undefined =>
+      this.computeFingerprint(body);
+
+    if (opts.fingerprint === true) {
+      return defaultFingerprint();
+    }
+
+    return opts.fingerprint({
+      context,
+      key: rawKey,
+      scope: scopedKey,
+      body,
+      defaultFingerprint,
+    });
   }
 
   /**
@@ -498,6 +650,58 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return createHash('sha256')
       .update(stableJsonStringify(body ?? null)!)
       .digest('hex');
+  }
+
+  private emitEvent(
+    opts: ResolvedOptions,
+    outcome: IdempotencyOutcome,
+    scopedKey: string,
+    details: { statusCode?: number; error?: unknown } = {},
+  ): void {
+    const onEvent = opts.observability?.onEvent;
+    if (!onEvent) {
+      return;
+    }
+
+    try {
+      const maybePromise = onEvent({
+        outcome,
+        keyHash: createHash('sha256').update(scopedKey).digest('hex'),
+        scope: scopedKey,
+        ...details,
+      });
+      void Promise.resolve(maybePromise).catch((err) => {
+        this.logger.warn(
+          `observability onEvent failed for key="${scopedKey}": ${(err as Error).message}`,
+        );
+      });
+    } catch (err) {
+      this.logger.warn(
+        `observability onEvent failed for key="${scopedKey}": ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private setIdempotencyStatus(
+    res: ResponseShape,
+    opts: ResolvedOptions,
+    status: string,
+  ): void {
+    if (!this.shouldExposeStatusHeaders(opts)) {
+      return;
+    }
+    this.setHeader(res, 'Idempotency-Status', status);
+  }
+
+  private shouldExposeStatusHeaders(opts: ResolvedOptions): boolean {
+    return opts.observability?.exposeStatusHeaders !== false;
+  }
+
+  private setHeader(res: ResponseShape, name: string, value: string): void {
+    const setHeader = res.setHeader ?? res.header;
+    if (setHeader) {
+      setHeader.call(res, name, value);
+    }
   }
 
   /**

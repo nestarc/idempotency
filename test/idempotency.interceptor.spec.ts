@@ -134,6 +134,133 @@ describe('IdempotencyInterceptor', () => {
         86_400,
       );
     });
+
+    it('uses a module-level keyResolver when no header is present', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        keyResolver: (ctx) => {
+          const req = ctx.switchToHttp().getRequest<{ body: { commandId: string } }>();
+          return req.body.commandId;
+        },
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: {},
+          body: { commandId: 'cmd-123', amount: 100 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'cmd-123',
+        expect.any(String),
+        86_400,
+      );
+    });
+
+    it('lets a route-level keyResolver override the module-level resolver', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        keyResolver: () => 'module-key',
+      });
+      const handler = decoratedHandler({
+        enabled: true,
+        keyResolver: () => 'route-key',
+      });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'header-key' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'route-key',
+        expect.any(String),
+        86_400,
+      );
+    });
+
+    it('supports an async keyResolver', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        keyResolver: async () => 'async-key',
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: {},
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'async-key',
+        expect.any(String),
+        86_400,
+      );
+    });
+
+    it('treats an undefined keyResolver result like a missing key', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        keyResolver: () => undefined,
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: {},
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(storage.get).not.toHaveBeenCalled();
+      expect(storage.create).not.toHaveBeenCalled();
+    });
+
+    it('fails before storage access when keyResolver throws', async () => {
+      const resolverError = new Error('resolver failed');
+      const { interceptor, storage } = buildInterceptor({
+        keyResolver: () => {
+          throw resolverError;
+        },
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: {},
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBe(resolverError);
+
+      expect(storage.get).not.toHaveBeenCalled();
+      expect(storage.create).not.toHaveBeenCalled();
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────
@@ -406,6 +533,150 @@ describe('IdempotencyInterceptor', () => {
       expect(result).toEqual({ ok: true });
       expect(next.handleSpy).not.toHaveBeenCalled();
     });
+
+    it('uses a custom fingerprint resolver for replay comparison', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        fingerprint: ({ body }) => {
+          const value = body as { orderId: string };
+          return `order:${value.orderId}`;
+        },
+      });
+      storage.seed({
+        key: 'K-custom-fp',
+        fingerprint: 'order:order-1',
+        status: 'COMPLETED',
+        statusCode: 200,
+        responseBody: '{"ok":true}',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-custom-fp' },
+          body: { orderId: 'order-1', nonce: 'different-each-time' },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of('NEVER'));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ ok: true });
+      expect(next.handleSpy).not.toHaveBeenCalled();
+    });
+
+    it('throws 422 when a custom fingerprint resolver returns a different fingerprint', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        fingerprint: ({ body }) => {
+          const value = body as { orderId: string };
+          return `order:${value.orderId}`;
+        },
+      });
+      storage.seed({
+        key: 'K-custom-fp-mismatch',
+        fingerprint: 'order:order-1',
+        status: 'COMPLETED',
+        statusCode: 200,
+        responseBody: '{"ok":true}',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-custom-fp-mismatch' },
+          body: { orderId: 'order-2' },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of('NEVER'));
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      expect(next.handleSpy).not.toHaveBeenCalled();
+    });
+
+    it('lets a route-level custom fingerprint resolver override the module-level resolver', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        fingerprint: () => 'module-fingerprint',
+      });
+      const handler = decoratedHandler({
+        enabled: true,
+        fingerprint: () => 'route-fingerprint',
+      });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-route-fp' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'K-route-fp',
+        'route-fingerprint',
+        86_400,
+      );
+    });
+
+    it('supports an async custom fingerprint resolver', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        fingerprint: async () => 'async-fingerprint',
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-async-fp' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'K-async-fp',
+        'async-fingerprint',
+        86_400,
+      );
+    });
+
+    it('fails before storage access when a custom fingerprint resolver throws', async () => {
+      const resolverError = new Error('fingerprint failed');
+      const { interceptor, storage } = buildInterceptor({
+        fingerprint: () => {
+          throw resolverError;
+        },
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-fp-error' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBe(resolverError);
+
+      expect(storage.get).not.toHaveBeenCalled();
+      expect(storage.create).not.toHaveBeenCalled();
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────
@@ -568,6 +839,95 @@ describe('IdempotencyInterceptor', () => {
         expect.any(Object),
         3600,
       );
+    });
+
+    it('uses processingTtl for create() and ttl for complete()', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        ttl: 86_400,
+        processingTtl: 30,
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-processing-ttl' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'K-processing-ttl',
+        expect.any(String),
+        30,
+      );
+      expect(storage.complete).toHaveBeenCalledWith(
+        'K-processing-ttl',
+        expect.any(String),
+        expect.any(Object),
+        86_400,
+      );
+    });
+
+    it('lets per-handler processingTtl override the module default', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        ttl: 86_400,
+        processingTtl: 300,
+      });
+      const handler = decoratedHandler({
+        enabled: true,
+        ttl: 3600,
+        processingTtl: 15,
+      });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-handler-processing-ttl' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(storage.create).toHaveBeenCalledWith(
+        'K-handler-processing-ttl',
+        expect.any(String),
+        15,
+      );
+      expect(storage.complete).toHaveBeenCalledWith(
+        'K-handler-processing-ttl',
+        expect.any(String),
+        expect.any(Object),
+        3600,
+      );
+    });
+
+    it('throws when processingTtl is not a positive integer', async () => {
+      const { interceptor, storage } = buildInterceptor({
+        processingTtl: 0,
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-invalid-processing-ttl' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toThrow(/processingTtl must be a positive integer/i);
+
+      expect(storage.get).not.toHaveBeenCalled();
+      expect(storage.create).not.toHaveBeenCalled();
     });
 
     // Case 16
@@ -743,10 +1103,293 @@ describe('IdempotencyInterceptor', () => {
   });
 
   // ──────────────────────────────────────────────────────────────────
-  // Group J: scope variants (regression for cross-endpoint collision, P1 #2)
+  // Group J: observability and status headers
   // ──────────────────────────────────────────────────────────────────
 
-  describe('J. scope (P1 #2 regression)', () => {
+  describe('J. observability and status headers', () => {
+    it('emits a redacted created event and sets Idempotency-Status on first execution', async () => {
+      const events: Array<{ outcome: string; keyHash: string }> = [];
+      const { interceptor } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(201);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-created' },
+          body: { v: 1 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Idempotency-Status',
+        'created',
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ outcome: 'created' });
+      expect(events[0].keyHash).not.toBe('K-created');
+      expect(events[0].keyHash).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('sets replay status headers and emits replayed when returning a cached response', async () => {
+      const events: Array<{ outcome: string }> = [];
+      const { interceptor, storage } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      storage.seed({
+        key: 'K-replayed',
+        fingerprint: sha256({ v: 1 }),
+        status: 'COMPLETED',
+        statusCode: 202,
+        responseBody: '{"ok":true}',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-replayed' },
+          body: { v: 1 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler(of('NEVER'));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ ok: true });
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Idempotency-Status',
+        'replayed',
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Idempotency-Replayed',
+        'true',
+      );
+      expect(events.map((event) => event.outcome)).toEqual(['replayed']);
+    });
+
+    it('sets conflict status headers and emits conflict for an in-flight duplicate', async () => {
+      const events: Array<{ outcome: string }> = [];
+      const { interceptor, storage } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      storage.seed({
+        key: 'K-conflict',
+        fingerprint: sha256({ v: 1 }),
+        status: 'PROCESSING',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-conflict' },
+          body: { v: 1 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler();
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Idempotency-Status',
+        'conflict',
+      );
+      expect(events.map((event) => event.outcome)).toEqual(['conflict']);
+    });
+
+    it('sets mismatch status headers and emits mismatch for fingerprint reuse', async () => {
+      const events: Array<{ outcome: string }> = [];
+      const { interceptor, storage } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      storage.seed({
+        key: 'K-mismatch-observed',
+        fingerprint: sha256({ v: 1 }),
+        status: 'COMPLETED',
+        statusCode: 200,
+        responseBody: '{"ok":true}',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const handler = decoratedHandler({ enabled: true });
+      const res = buildResponse(200);
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-mismatch-observed' },
+          body: { v: 2 },
+        },
+        res,
+        handler,
+      });
+      const next = buildCallHandler();
+
+      await expect(
+        firstValueFrom(interceptor.intercept(context, next)),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Idempotency-Status',
+        'mismatch',
+      );
+      expect(events.map((event) => event.outcome)).toEqual(['mismatch']);
+    });
+
+    it('emits stale when complete() reports a stale token', async () => {
+      const events: Array<{ outcome: string }> = [];
+      const { interceptor, storage } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      storage.complete.mockResolvedValueOnce('stale');
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-stale-observed' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ ok: true });
+      expect(events.map((event) => event.outcome)).toEqual(['stale']);
+      warnSpy.mockRestore();
+    });
+
+    it('emits complete_error when complete() throws and still emits the handler value', async () => {
+      const events: Array<{ outcome: string }> = [];
+      const { interceptor, storage } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      storage.complete.mockRejectedValueOnce(new Error('redis down'));
+      const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-complete-error-observed' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ ok: true });
+      expect(events.map((event) => event.outcome)).toEqual(['complete_error']);
+      errorSpy.mockRestore();
+    });
+
+    it('emits bypassed for non-replayable responses', async () => {
+      const events: Array<{ outcome: string }> = [];
+      const { interceptor } = buildInterceptor({
+        observability: {
+          onEvent: (event) => {
+            events.push(event);
+          },
+        },
+      });
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const handler = decoratedHandler({ enabled: true });
+      const body = Buffer.from('not-json');
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-bypassed' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of(body));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toBe(body);
+      expect(events.map((event) => event.outcome)).toEqual(['bypassed']);
+      warnSpy.mockRestore();
+    });
+
+    it('swallows onEvent failures without changing the request result', async () => {
+      const { interceptor } = buildInterceptor({
+        observability: {
+          onEvent: () => {
+            throw new Error('metrics backend down');
+          },
+        },
+      });
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const handler = decoratedHandler({ enabled: true });
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-event-throws' },
+          body: { v: 1 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ ok: true }));
+
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+
+      expect(result).toEqual({ ok: true });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/observability onEvent/i),
+      );
+      warnSpy.mockRestore();
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Group K: scope variants (regression for cross-endpoint collision, P1 #2)
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('K. scope (P1 #2 regression)', () => {
     class PaymentsController {}
     class RefundsController {}
 
@@ -1098,6 +1741,7 @@ describe('IdempotencyInterceptor', () => {
     it('does not replay stored headers when replayHeaders=false', async () => {
       const { interceptor, storage } = buildInterceptor({
         replayHeaders: false,
+        observability: { exposeStatusHeaders: false },
       });
       const fp = sha256({ amount: 100 });
       storage.seed({
@@ -1137,6 +1781,7 @@ describe('IdempotencyInterceptor', () => {
     it('filters stored replay headers through explicit allowlist', async () => {
       const { interceptor, storage } = buildInterceptor({
         replayHeaders: ['location'],
+        observability: { exposeStatusHeaders: false },
       });
       const fp = sha256({ amount: 100 });
       storage.seed({
