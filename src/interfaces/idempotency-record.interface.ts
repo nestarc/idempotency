@@ -36,7 +36,7 @@ export interface IdempotencyRecord {
   /** Captured HTTP status code of the original handler response. */
   statusCode?: number;
 
-  /** JSON-serialized response body, ready to be parsed and replayed. */
+  /** Opaque versioned replay payload; storage must preserve it unchanged. */
   responseBody?: string;
 
   /** Lowercase HTTP response headers captured for replay. */

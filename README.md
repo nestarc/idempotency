@@ -109,6 +109,73 @@ createPayment() { ... }
 
 In all three cases, only handlers decorated with `@Idempotent()` are processed. Routes without the decorator pass through untouched.
 
+### Response replay contract
+
+Register idempotency **before** every interceptor that transforms the response.
+[Nest executes the outgoing chain in reverse order](https://docs.nestjs.com/faq/request-lifecycle#interceptors), so idempotency then captures
+the transformed value. For example:
+
+```ts
+import { ClassSerializerInterceptor, UseInterceptors } from '@nestjs/common';
+
+@UseInterceptors(IdempotencyInterceptor, ClassSerializerInterceptor)
+@Idempotent()
+@Post()
+createPayment() { /* return a DTO or a Promise of one */ }
+```
+
+For global registration, put the `APP_INTERCEPTOR` provider for
+`IdempotencyInterceptor` before the one for `ClassSerializerInterceptor`.
+A global serializer with controller/method-scoped idempotency has the wrong order.
+With the supported order, `@Exclude()` is applied before storage and `@Transform()`
+(including `@SerializeOptions({ type: ... })`) is not applied again on replay.
+The library cannot detect arbitrary outer response transformations; the ordering
+requirement also applies to custom interceptors and adapter serialization hooks.
+Adapter-specific response schemas or serializers that further transform the body
+are outside this replay contract.
+
+| Response path | Behavior with `@Idempotent()` |
+| --- | --- |
+| Plain JSON, or a Promise of it | Capture status, body and allowed headers; replay without calling the handler. |
+| Ordinary HTTP Observable | Wait for successful completion, then capture only the last value. `EMPTY` is an empty (`undefined`) successful response. |
+| `@Res({ passthrough: true })` | Supported when setting status/headers and returning a JSON value. |
+| Class instances reaching idempotency, `Date`, `StreamableFile`, binary/streams, or other unsupported values | Pass the original value to Nest, emit `bypassed`, retain the existing PROCESSING lease; retries receive 409 during the lease. |
+| Passthrough handler already called `send()` | Keep the response already sent and retain the lease; do not write extra headers after send. |
+| Direct `@Res()`/`@Next()` without passthrough, `@Render()`, `@Redirect()` | Configuration error 500 before handler or storage access, on every request. |
+| SSE | Unsupported. Handler and storage are not called. Nest may already have opened HTTP 200, then send an error event and close the stream. |
+
+Supported JSON consists of null, strings, booleans, finite numbers, normal arrays,
+and recursively plain or null-prototype objects. Root `undefined` is an empty
+body. Convert dates to strings before this boundary. Nested `undefined`, class
+instances, custom prototypes, sparse arrays, accessors, `toJSON`, proxies,
+functions, symbols, BigInt and circular values are excluded. Nonenumerable data
+properties are ignored. A wrong-order class response is bypassed rather than
+cached with its serialization metadata lost, but not every ordering mistake is
+detectable from a plain object.
+
+An unsupported response is still subject to Nest/adapter handling: passing it
+through cannot make an invalid HTTP body valid. A retained lease only protects
+until `processingTtl` expires; retrying after expiry can execute the operation
+again. A source error discards intermediate values and uses the existing error
+cleanup. Subscription cancellation does not complete or delete the record.
+
+### Upgrading stored responses (S1, unreleased)
+
+New captures use a versioned opaque `responseBody` string, including empty bodies.
+Custom storage adapters must preserve that string exactly; do not parse or
+re-serialize it as JSON. Storage keys and database schema remain unchanged.
+Existing unversioned, missing, corrupt or unsupported-version COMPLETED bodies
+return 409 without applying stored status/headers, deleting the record, or
+re-running the handler. A fingerprint mismatch still returns 422 first.
+
+Old and new readers/writers cannot safely coexist. Pause traffic to protected
+routes, drain in-flight work, replace all application instances, then resume with
+the same storage and keys. Preserve legacy records until their normal expiry or
+reconcile the original operation in the business system. Do not rotate keys or
+clear storage simply to turn 409 into a new execution. Rolling back also requires
+pausing traffic and resolving new-format records: old code cannot read them.
+TTL expiry alone does not prove the business operation failed.
+
 ## Redis storage
 
 ```ts
@@ -401,7 +468,8 @@ Client Request (with Idempotency-Key header)
     │     (default: `HTTP_METHOD /actual/path::`, without query string)
     │
     ├─ 3. Look up the scoped key in storage
-    │     ├─ COMPLETED + fingerprint match       → replay cached response
+    │     ├─ COMPLETED + matching fingerprint + supported body → replay
+    │     ├─ COMPLETED + legacy/corrupt body       → 409 (keep record)
     │     ├─ fingerprint mismatch (any status)   → 422 Unprocessable Entity
     │     ├─ PROCESSING                           → 409 Conflict
     │     └─ not found                            → step 4
@@ -414,18 +482,18 @@ Client Request (with Idempotency-Key header)
     │
     ├─ 5. Run the controller handler
     │
-    └─ 6. Capture the response
+    └─ 6. Capture the final response after successful completion
           ├─ plain JSON             → storage.complete(token, statusCode, body, safe headers)
           │   ├─ 'ok'               → emit handler value
           │   ├─ 'stale' (TTL race) → warn + emit (don't clobber newer record)
           │   └─ throws (transient) → ERROR log + emit (don't delete — retries
           │                            hit 409 until TTL reclaims the record,
-          │                            never duplicate execution)
-          ├─ Buffer / stream / etc. → bypass cache + warn + emit + delete
+          │                            expiry can allow re-execution)
+          ├─ unsupported response  → bypass + warn + emit, keep PROCESSING
           └─ handler threw          → delete record (best-effort) + rethrow
 ```
 
-The interceptor uses RxJS `concatMap` to ensure the storage write completes **before** the response is emitted to the client — preventing a race window where a duplicate request arriving microseconds later could observe the wrong state.
+The interceptor waits for the ordinary HTTP source to complete and uses RxJS `concatMap` to await the storage write before emitting the final value. Intermediate emissions are never published as completed responses.
 
 Storage adapters implement **token-based compare-and-set**: each `create()` returns an opaque token that the interceptor passes back to `complete()` / `delete()`. A slow caller whose PROCESSING record was evicted by TTL and replaced by a newer request cannot clobber the newer record — the storage returns `'stale'` and the interceptor logs a warning while still emitting the handler's value to the original caller.
 
@@ -433,11 +501,12 @@ Storage adapters implement **token-based compare-and-set**: each `create()` retu
 
 | Status | When                                                                                                                                                                   | IETF rationale                    |
 | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-|    400 | `Idempotency-Key` header is missing and `required: true` (the default), or a configured `ttl` is not a positive integer                                                | client contract / developer error |
-|    409 | The record under this scoped key is currently `PROCESSING` — either observed on the initial read or after losing an atomic `create()` race to a winner still in flight | concurrent duplicate              |
+|    400 | Required key is missing, or the resolved key exceeds `maxKeyLength` | client contract |
+|    409 | The record is PROCESSING, or its completed payload is legacy/corrupt/unsupported | concurrent duplicate / safe replay unavailable |
 |    422 | A record exists under this scoped key with a different request-body fingerprint (reused key with new payload)                                                          | key reused with new payload       |
+|    500 | Invalid developer configuration, including unsupported manual/render/redirect response modes or invalid TTLs | configuration error; SSE follows the stream behavior above |
 
-Note that v0.1.3+ returns a **replay** (not a 409) when the race winner has already finished — the interceptor re-reads the record on a lost `create()` race and dispatches through the same state machine as the initial-read branch.
+When a racing winner has already finished with a supported payload and matching fingerprint, its response is replayed. The interceptor re-reads the record after a lost `create()` race and applies the same validation as on the initial read.
 
 ## Storage adapters
 
@@ -542,7 +611,7 @@ Deferred to future versions:
 - **Body fingerprint uses stable JSON serialization.** Object keys are sorted recursively before hashing, so semantically equivalent JSON objects with different key order produce the same fingerprint. Array order remains significant.
 - **Custom fingerprints are caller-defined.** A resolver must be deterministic for the same semantic request. Non-deterministic values such as timestamps or random ids will cause false 422 mismatches.
 - **Processing TTL is a lease, not a transaction.** A short `processingTtl` helps recover stuck records, but if it is shorter than real handler execution time, a retry can acquire the key while the first request is still running.
-- **Only plain-JSON responses are cached.** Buffers, typed arrays, Node streams, and Web `ReadableStream` are actively detected and bypass caching with a logged warning — the handler still runs and the caller still gets the response, but there is no replay for binary endpoints.
+- **Replay requires the supported response boundary.** Register idempotency before response transformers. Unsupported values retain their PROCESSING lease and are not replayed; see the response contract and upgrade procedure above.
 - **TTL-expiry race is closed via token-based CAS.** A slow request whose PROCESSING record has been evicted by TTL cannot clobber a newer request's record under the same key — the storage refuses the write and the interceptor logs a `stale token` warning while still emitting the handler's response to the caller.
 
 ## Roadmap

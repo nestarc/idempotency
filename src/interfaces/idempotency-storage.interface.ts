@@ -7,7 +7,12 @@ export interface CompleteResponse {
   /** HTTP status code emitted by the original handler. */
   statusCode: number;
 
-  /** JSON-serialized response body, or undefined for empty bodies (e.g. 204). */
+  /**
+   * Opaque replay payload. Store and return this string unchanged; do not
+   * JSON.parse/stringify or otherwise normalize it. The interceptor writes a
+   * versioned envelope, including for empty HTTP bodies. Optional for storage
+   * callers and older records; missing/legacy payloads are not replayed.
+   */
   body?: string;
 
   /** Lowercase HTTP response headers captured for replay. */

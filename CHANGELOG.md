@@ -4,6 +4,30 @@ All notable changes to `@nestarc/idempotency` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Capture the final value only after successful completion of an ordinary HTTP
+  Observable. Intermediate emissions are never replayed; EMPTY is an empty response.
+- Exclude class instances and unsupported nested values from replay capture.
+  Register idempotency before response transformers to preserve Exclude/Transform
+  behavior without applying transformations again on replay.
+- Prevent StreamableFile internals from being cached as JSON. Unsupported results
+  retain their processing lease instead of allowing immediate duplicate execution.
+- Reject direct manual responses, rendering, redirects and SSE before handler or
+  storage access. Detect passthrough handlers that already sent the response.
+
+### Changed
+
+- **Breaking storage-format transition:** new response bodies use a versioned
+  opaque string, including empty responses. Legacy/corrupt records return 409
+  without re-execution. Custom adapters must preserve payloads unchanged.
+  Old/new readers and writers must not overlap during deployment or rollback;
+  follow the README upgrade procedure. No key or database schema change.
+- Added class-transformer 0.5.1 as a development dependency for Express/Fastify
+  serialization regression tests. No new runtime dependency or public export.
+
 ## [0.4.0] - 2026-06-16
 
 ### Added

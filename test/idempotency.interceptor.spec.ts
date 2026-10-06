@@ -14,6 +14,7 @@ import { IdempotencyInterceptor } from '../src/idempotency.interceptor';
 import { Idempotent } from '../src/idempotency.decorator';
 import { IDEMPOTENT_METADATA_KEY } from '../src/idempotency.constants';
 import { stableJsonStringify } from '../src/utils/stable-json';
+import { encodeReplayBody } from '../src/utils/replay-body';
 import type { IdempotencyOptions } from '../src/interfaces/idempotency-options.interface';
 import type { IdempotentMetadata } from '../src/interfaces/idempotency-options.interface';
 
@@ -299,7 +300,7 @@ describe('IdempotencyInterceptor', () => {
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
         expect.any(String), // token
-        { statusCode: 201, body: '{"ok":true}' },
+        { statusCode: 201, body: encodeReplayBody({ ok: true }) },
         86_400,
       );
 
@@ -328,7 +329,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 202,
-        responseBody: '{"id":1}',
+        responseBody: encodeReplayBody({ id: 1 }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -426,7 +427,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: sha256({ amount: 100 }),
         status: 'COMPLETED',
         statusCode: 200,
-        responseBody: '{}',
+        responseBody: encodeReplayBody({}),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -482,7 +483,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: undefined,
         status: 'COMPLETED',
         statusCode: 200,
-        responseBody: '{"id":42}',
+        responseBody: encodeReplayBody({ id: 42 }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -511,7 +512,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: sha256({ a: { c: 3, d: 4 }, b: 2 }),
         status: 'COMPLETED',
         statusCode: 200,
-        responseBody: '{"ok":true}',
+        responseBody: encodeReplayBody({ ok: true }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -546,7 +547,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: 'order:order-1',
         status: 'COMPLETED',
         statusCode: 200,
-        responseBody: '{"ok":true}',
+        responseBody: encodeReplayBody({ ok: true }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -579,7 +580,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: 'order:order-1',
         status: 'COMPLETED',
         statusCode: 200,
-        responseBody: '{"ok":true}',
+        responseBody: encodeReplayBody({ ok: true }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -953,7 +954,7 @@ describe('IdempotencyInterceptor', () => {
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
         expect.any(String),
-        { statusCode: 200, body: '{"fromPromise":true}' },
+        { statusCode: 200, body: encodeReplayBody({ fromPromise: true }) },
         86_400,
       );
     });
@@ -980,13 +981,21 @@ describe('IdempotencyInterceptor', () => {
       expect(storage.complete).toHaveBeenCalledWith(
         'K1',
         expect.any(String),
-        { statusCode: 204, body: undefined },
+        { statusCode: 204, body: encodeReplayBody(undefined) },
         86_400,
       );
+
+      const retry = buildCallHandler(of('NEVER'));
+      const replay = await firstValueFrom(interceptor.intercept(context, retry));
+
+      expect(replay).toBeUndefined();
+      expect(res.status).toHaveBeenCalledWith(204);
+      expect(retry.handleSpy).not.toHaveBeenCalled();
+      expect(storage.complete).toHaveBeenCalledTimes(1);
     });
 
     // Case 18
-    it('logs a warning, deletes the key, and still emits when the response is not JSON-serializable', async () => {
+    it('preserves the processing lease and emits a circular response while blocking retries', async () => {
       const { interceptor, storage } = buildInterceptor();
       const handler = decoratedHandler({ enabled: true });
       const { context } = buildExecutionContext({
@@ -1009,8 +1018,19 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toBe(circular);
       expect(storage.complete).not.toHaveBeenCalled();
-      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
-      expect(warnSpy).toHaveBeenCalled();
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(await storage.get('K1')).toMatchObject({ status: 'PROCESSING' });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/not replayable.*retaining.*PROCESSING/i),
+      );
+
+      const retry = buildCallHandler(of('NEVER'));
+      await expect(
+        firstValueFrom(interceptor.intercept(context, retry)),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(retry.handleSpy).not.toHaveBeenCalled();
+      expect(next.handleSpy).toHaveBeenCalledTimes(1);
+      expect(storage.create).toHaveBeenCalledTimes(1);
 
       warnSpy.mockRestore();
     });
@@ -1155,7 +1175,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: sha256({ v: 1 }),
         status: 'COMPLETED',
         statusCode: 202,
-        responseBody: '{"ok":true}',
+        responseBody: encodeReplayBody({ ok: true }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -1240,7 +1260,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: sha256({ v: 1 }),
         status: 'COMPLETED',
         statusCode: 200,
-        responseBody: '{"ok":true}',
+        responseBody: encodeReplayBody({ ok: true }),
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
@@ -1326,9 +1346,9 @@ describe('IdempotencyInterceptor', () => {
       errorSpy.mockRestore();
     });
 
-    it('emits bypassed for non-replayable responses', async () => {
+    it('emits bypassed while retaining the lease for a non-replayable response', async () => {
       const events: Array<{ outcome: string }> = [];
-      const { interceptor } = buildInterceptor({
+      const { interceptor, storage } = buildInterceptor({
         observability: {
           onEvent: (event) => {
             events.push(event);
@@ -1352,6 +1372,11 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toBe(body);
       expect(events.map((event) => event.outcome)).toEqual(['bypassed']);
+      expect(storage.complete).not.toHaveBeenCalled();
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(await storage.get('K-bypassed')).toMatchObject({
+        status: 'PROCESSING',
+      });
       warnSpy.mockRestore();
     });
 
@@ -1651,7 +1676,7 @@ describe('IdempotencyInterceptor', () => {
         expect.any(String),
         {
           statusCode: 201,
-          body: '{"id":"pay_1"}',
+          body: encodeReplayBody({ id: 'pay_1' }),
           headers: {
             location: '/payments/pay_1',
             'x-request-id': 'req_1',
@@ -1672,7 +1697,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 201,
-        responseBody: '{"id":"pay_1"}',
+        responseBody: encodeReplayBody({ id: 'pay_1' }),
         responseHeaders: {
           location: '/payments/pay_1',
           'x-request-id': 'req_1',
@@ -1731,7 +1756,7 @@ describe('IdempotencyInterceptor', () => {
         expect.any(String),
         {
           statusCode: 201,
-          body: '{"id":"pay_1"}',
+          body: encodeReplayBody({ id: 'pay_1' }),
           headers: undefined,
         },
         86_400,
@@ -1749,7 +1774,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 201,
-        responseBody: '{"id":"pay_1"}',
+        responseBody: encodeReplayBody({ id: 'pay_1' }),
         responseHeaders: {
           location: '/payments/pay_1',
           'x-request-id': 'req_1',
@@ -1789,7 +1814,7 @@ describe('IdempotencyInterceptor', () => {
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 201,
-        responseBody: '{"id":"pay_1"}',
+        responseBody: encodeReplayBody({ id: 'pay_1' }),
         responseHeaders: {
           location: '/payments/pay_1',
           'x-request-id': 'req_1',
@@ -1867,7 +1892,7 @@ describe('IdempotencyInterceptor', () => {
     ];
 
     for (const { name, build } of nonReplayableCases) {
-      it(`skips caching for ${name} responses (delete + warn, caller still gets the value)`, async () => {
+      it(`retains the processing lease for ${name} responses and blocks retries`, async () => {
         const { interceptor, storage } = buildInterceptor();
         const handler = decoratedHandler({ enabled: true });
         const { context } = buildExecutionContext({
@@ -1893,15 +1918,22 @@ describe('IdempotencyInterceptor', () => {
 
         // complete() was NEVER called with a JSON'd version of the value.
         expect(storage.complete).not.toHaveBeenCalled();
-        // The lock record was released so a future request can retry.
-        expect(storage.delete).toHaveBeenCalledWith(
-          `K-${name}`,
-          expect.any(String),
-        );
-        // A warning explaining the type was emitted.
+        // The successful handler must not become immediately executable again.
+        expect(storage.delete).not.toHaveBeenCalled();
+        expect(await storage.get(`K-${name}`)).toMatchObject({
+          status: 'PROCESSING',
+        });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringMatching(/not a plain JSON value/i),
+          expect.stringMatching(/not replayable.*retaining.*PROCESSING/i),
         );
+
+        const retry = buildCallHandler(of('NEVER'));
+        await expect(
+          firstValueFrom(interceptor.intercept(context, retry)),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(retry.handleSpy).not.toHaveBeenCalled();
+        expect(next.handleSpy).toHaveBeenCalledTimes(1);
+        expect(storage.create).toHaveBeenCalledTimes(1);
         warnSpy.mockRestore();
       });
     }

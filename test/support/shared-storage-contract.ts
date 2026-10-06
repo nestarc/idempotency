@@ -17,6 +17,7 @@
  *   8. `delete()` with a wrong token returns `'stale'` and does NOT remove.
  *   9. `delete()` on a missing key returns `'ok'` (idempotent cleanup).
  *  10. `complete()` refreshes `expiresAt` to the new TTL window.
+ *  11. Response bodies round-trip as opaque strings, including non-JSON encodings.
  *
  * Plug a new adapter into the suite via `describeStorageContract('Name', factory)`
  * inside that adapter's spec file. Any behavioral drift between adapters will
@@ -92,6 +93,15 @@ export const describeStorageContract = (
       expect(record!.status).toBe('COMPLETED');
       expect(record!.statusCode).toBe(201);
       expect(record!.responseBody).toBe('{"id":"xyz"}');
+    });
+
+    it('round-trips opaque response strings without interpreting their encoding', async () => {
+      const body = '@nestarc/idempotency:replay:v1:{"kind":"undefined"}';
+      const { token } = await storage.create('contract-opaque-body', 'fp', 60);
+      await expect(
+        storage.complete('contract-opaque-body', token!, { statusCode: 204, body }, 60),
+      ).resolves.toBe('ok');
+      expect((await storage.get('contract-opaque-body'))!.responseBody).toBe(body);
     });
 
     it('complete() snapshots response headers for replay', async () => {

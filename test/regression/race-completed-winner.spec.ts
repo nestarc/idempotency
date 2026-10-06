@@ -19,6 +19,7 @@ import { firstValueFrom, of } from 'rxjs';
 
 import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { IDEMPOTENT_METADATA_KEY } from '../../src/idempotency.constants';
+import { encodeReplayBody } from '../../src/utils/replay-body';
 import type { IdempotencyOptions } from '../../src/interfaces/idempotency-options.interface';
 import type { IdempotencyRecord } from '../../src/interfaces/idempotency-record.interface';
 import { FakeStorage } from '../support/fake-storage';
@@ -68,7 +69,7 @@ describe('REGRESSION: get→create race dispatch', () => {
       fingerprint: sha256({ amount: 100 }),
       status: 'COMPLETED',
       statusCode: 201,
-      responseBody: '{"id":"from-B"}',
+      responseBody: encodeReplayBody({ id: 'from-B' }),
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
     };
@@ -121,7 +122,7 @@ describe('REGRESSION: get→create race dispatch', () => {
       fingerprint: sha256({ amount: 100 }), // B's body
       status: 'COMPLETED',
       statusCode: 201,
-      responseBody: '{"id":"from-B"}',
+      responseBody: encodeReplayBody({ id: 'from-B' }),
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
     };

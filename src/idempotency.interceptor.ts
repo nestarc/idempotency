@@ -14,11 +14,13 @@ import { createHash } from 'crypto';
 import {
   catchError,
   concatMap,
+  defaultIfEmpty,
   from,
   map,
   Observable,
   of,
   switchMap,
+  takeLast,
   throwError,
 } from 'rxjs';
 
@@ -30,6 +32,8 @@ import {
   IDEMPOTENT_METADATA_KEY,
 } from './idempotency.constants';
 import { extractActualRequestPath } from './utils/request-scope';
+import { decodeReplayBody, encodeReplayBody } from './utils/replay-body';
+import { assertReplayableResponseMode } from './utils/response-mode';
 import {
   captureReplayHeaders,
   replayStoredHeaders,
@@ -76,12 +80,15 @@ interface RequestShape {
 /**
  * The minimal shape of the response object the interceptor touches.
  * Matches both Express's `Response` and Fastify's `FastifyReply` signatures
- * for the two operations we actually use: reading the effective statusCode
- * and setting it for a replay.
+ * including effective status, replay headers and whether the handler has
+ * already sent the response outside the return-value pipeline.
  */
 interface ResponseShape extends HeaderCaptureResponse, HeaderReplayResponse {
   statusCode?: number;
   status: (code: number) => unknown;
+  headersSent?: boolean;
+  sent?: boolean;
+  raw?: { headersSent?: boolean };
 }
 
 /**
@@ -130,11 +137,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    // resolveOptions throws sync on invalid TTL — convert to an Observable
-    // error so callers uniformly await rejection via firstValueFrom/subscribe.
+    // Convert configuration errors to Observable errors so callers uniformly
+    // await rejection via firstValueFrom/subscribe.
     let opts: ResolvedOptions;
     try {
       opts = this.resolveOptions(metadata);
+      assertReplayableResponseMode(context);
     } catch (err) {
       return throwError(() => err);
     }
@@ -205,10 +213,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
   /**
    * Dispatches a request that observed an EXISTING storage record.
    *
-   * Three outcomes, in priority order:
+   * Outcomes, in priority order:
    * - Fingerprint mismatch → 422 (beats PROCESSING even while in-flight)
    * - Status is PROCESSING → 409
-   * - Status is COMPLETED → replay (restore statusCode, parse body)
+   * - Status is COMPLETED with a supported payload → replay
+   * - Legacy/corrupt payload → 409 without applying its status/headers/body
    *
    * Extracted from {@link intercept} for SRP — the rules governing
    * "what to do with a record that already exists" change independently
@@ -253,7 +262,21 @@ export class IdempotencyInterceptor implements NestInterceptor {
       );
     }
 
-    // Status is COMPLETED — replay the cached response.
+    // Old records can contain class fields omitted by the HTTP serializer.
+    // A versioned payload identifies captures using the current boundary.
+    // Keep unrecognized records in place rather than re-running the operation.
+    const decoded = decodeReplayBody(existing.responseBody);
+    if (!decoded.replayable) {
+      this.setIdempotencyStatus(res, opts, 'conflict');
+      this.emitEvent(opts, 'conflict', scopedKey, { statusCode: 409 });
+      return throwError(
+        () => new ConflictException(
+          'Stored response cannot be safely replayed; reconcile the original operation before retrying',
+        ),
+      );
+    }
+
+    // Status is COMPLETED with a supported payload — replay the cached response.
     if (typeof existing.statusCode === 'number') {
       res.status(existing.statusCode);
     }
@@ -265,11 +288,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     this.emitEvent(opts, 'replayed', scopedKey, {
       statusCode: existing.statusCode,
     });
-    const body =
-      existing.responseBody !== undefined
-        ? JSON.parse(existing.responseBody)
-        : undefined;
-    return of(body);
+    return of(decoded.value);
   }
 
   /**
@@ -331,6 +350,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
         const token = createResult.token;
 
         return next.handle().pipe(
+          // Nest's ordinary HTTP response uses the final value on completion.
+          // Never expose an intermediate emission as a completed operation.
+          takeLast(1),
+          defaultIfEmpty(undefined),
           concatMap((value) =>
             this.captureResponse(scopedKey, token, value, res, opts),
           ),
@@ -356,11 +379,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
   }
 
   /**
-   * Captures the handler's emitted value into storage, handling all the
+   * Captures the handler's final, successfully completed value, handling the
    * corner cases that would otherwise clutter the main pipeline:
    *
-   * - Non-replayable types (Buffer, streams) → bypass cache + warn
-   * - JSON serialization failure (circular refs) → bypass cache + warn
+   * - Unsupported shapes or already-sent responses → bypass cache + warn,
+   *   retaining PROCESSING until its existing lease expires
    * - Storage complete() returns 'stale' → emit anyway + warn
    * - Storage complete() THROWS (transient failure) → emit anyway + error log,
    *   **do not delete the record**. The handler succeeded; a transient write
@@ -381,51 +404,23 @@ export class IdempotencyInterceptor implements NestInterceptor {
     res: ResponseShape,
     opts: ResolvedOptions,
   ): Observable<unknown> {
-    // Guard #1: non-replayable response types (Buffer, streams, etc.)
-    if (!IdempotencyInterceptor.isReplayable(value)) {
-      this.logger.warn(
-        `Response for key="${scopedKey}" is not a plain JSON value (type=${IdempotencyInterceptor.describeType(value)}); skipping cache`,
-      );
-      this.setIdempotencyStatus(res, opts, 'bypassed');
-      this.emitEvent(opts, 'bypassed', scopedKey, {
-        statusCode: res.statusCode ?? 200,
-      });
-      return from(this.storage.delete(scopedKey, token)).pipe(
-        // Even the cleanup-delete is total — if it throws, emit the value
-        // anyway. The handler already succeeded.
-        catchError((err) => {
-          this.logger.warn(
-            `storage.delete() failed during non-replayable cleanup for key="${scopedKey}": ${(err as Error).message}. Emitting handler value anyway.`,
-          );
-          return of(undefined);
-        }),
-        map(() => value),
-      );
-    }
-
-    // Guard #2: JSON serialization failure (circular refs, BigInt, etc.)
-    let serialized: string | undefined;
+    // Passthrough is supported only for status/headers plus a returned value.
+    // A handler that already sent its response cannot be captured accurately.
+    const alreadySent = res.headersSent || res.sent || res.raw?.headersSent;
+    let serialized: string;
     try {
-      serialized =
-        value === undefined ? undefined : JSON.stringify(value);
+      if (alreadySent) throw new Error('HTTP response was already sent');
+      serialized = encodeReplayBody(value);
     } catch (err) {
       this.logger.warn(
-        `Response for key="${scopedKey}" is not JSON-serializable; skipping cache (${(err as Error).message})`,
+        `Response is not replayable; retaining the PROCESSING record until its lease expires`,
       );
-      this.setIdempotencyStatus(res, opts, 'bypassed');
+      if (!alreadySent) this.setIdempotencyStatus(res, opts, 'bypassed');
       this.emitEvent(opts, 'bypassed', scopedKey, {
         statusCode: res.statusCode ?? 200,
         error: err,
       });
-      return from(this.storage.delete(scopedKey, token)).pipe(
-        catchError((delErr) => {
-          this.logger.warn(
-            `storage.delete() failed during serialization-failure cleanup for key="${scopedKey}": ${(delErr as Error).message}. Emitting handler value anyway.`,
-          );
-          return of(undefined);
-        }),
-        map(() => value),
-      );
+      return of(value);
     }
 
     const statusCode = res.statusCode ?? 200;
@@ -702,49 +697,5 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (setHeader) {
       setHeader.call(res, name, value);
     }
-  }
-
-  /**
-   * True if the value is a plain JSON-replayable shape: null, undefined,
-   * primitives, plain objects, and arrays. False for Buffers, typed arrays,
-   * ArrayBuffers, Node streams, and Web ReadableStreams — those will not
-   * round-trip correctly through JSON.parse(JSON.stringify(...)).
-   */
-  private static isReplayable(value: unknown): boolean {
-    if (value === null || value === undefined) {
-      return true;
-    }
-    if (typeof value !== 'object') {
-      return true;
-    }
-    if (Buffer.isBuffer(value)) {
-      return false;
-    }
-    if (ArrayBuffer.isView(value)) {
-      return false;
-    }
-    if (value instanceof ArrayBuffer) {
-      return false;
-    }
-    const maybeStream = value as { pipe?: unknown; getReader?: unknown };
-    if (typeof maybeStream.pipe === 'function') {
-      return false;
-    }
-    if (typeof maybeStream.getReader === 'function') {
-      return false;
-    }
-    return true;
-  }
-
-  private static describeType(value: unknown): string {
-    if (value === null) return 'null';
-    if (value === undefined) return 'undefined';
-    if (Buffer.isBuffer(value)) return 'Buffer';
-    if (ArrayBuffer.isView(value)) return value.constructor.name;
-    if (value instanceof ArrayBuffer) return 'ArrayBuffer';
-    const maybeStream = value as { pipe?: unknown; getReader?: unknown };
-    if (typeof maybeStream.pipe === 'function') return 'Stream';
-    if (typeof maybeStream.getReader === 'function') return 'ReadableStream';
-    return typeof value;
   }
 }
