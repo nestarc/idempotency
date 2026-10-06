@@ -34,11 +34,46 @@ If you plan to use the Redis storage adapter, also install `ioredis`:
 npm install ioredis
 ```
 
-If you plan to use the PostgreSQL storage adapter, also install `pg`:
+If you plan to use the PostgreSQL storage adapter, install `pg` and its
+TypeScript declarations (for TypeScript consumers):
 
 ```bash
 npm install pg
+npm install --save-dev @types/pg
 ```
+
+Memory needs neither database driver nor database type package. Redis includes
+its own declarations and needs no PostgreSQL packages. These are optional peers;
+install only the driver you use, alongside your application's Nest common/core,
+reflect-metadata and rxjs dependencies.
+
+### Public imports (1.0, unreleased)
+
+| Import path | Public API | Additional dependency |
+| --- | --- | --- |
+| `@nestarc/idempotency` | Module, interceptor, decorator, MemoryStorage, tokens and common types | None beyond Nest peers |
+| `@nestarc/idempotency/redis` | RedisStorage, RedisStorageOptions | `ioredis ^5` |
+| `@nestarc/idempotency/postgres` | PostgresStorage, PostgresStorageOptions, PostgresSweepService, SweepOptions | `pg ^8.11`, and `@types/pg ^8.11` for TypeScript |
+| `@nestarc/idempotency/sql/init.sql` | Schema file, located with `require.resolve()` | None |
+| `@nestarc/idempotency/package.json` | Package metadata | None |
+
+From 0.4, move Redis/Postgres classes and adapter option types out of root imports
+to the paths above. Move the sweep service and SweepOptions to `/postgres` too.
+Memory and common imports stay the same. Internal `dist/*` and storage-barrel
+paths are not public exports. This is an import change for 1.0; the package
+version remains 0.4.0 in this unreleased development tree.
+
+The root also exports `IdempotencyKeyResolver`, `IdempotencyFingerprintInput`,
+`IdempotencyFingerprintResolver`, `IdempotencyEvent`, `IdempotencyOutcome` and
+`IdempotencyObservabilityOptions`. Use `import type` for these interfaces and
+callbacks.
+
+The supported compiler baseline is TypeScript 5.7.3 with `strict: true` and
+`skipLibCheck: false`. CommonJS consumers are checked with `moduleResolution`
+`node` (module `CommonJS`), `node16` (module `Node16`) and `nodenext` (module
+`NodeNext`), with package type `commonjs`. The package still ships CommonJS only;
+ESM builds and bundler resolution are outside this validation scope. The final
+Node/Nest version matrix is tracked in [S8](docs/1.0.0/work-items/S8-release-validation.md).
 
 ## Quick start
 
@@ -179,7 +214,8 @@ TTL expiry alone does not prove the business operation failed.
 ## Redis storage
 
 ```ts
-import { IdempotencyModule, RedisStorage } from '@nestarc/idempotency';
+import { IdempotencyModule } from '@nestarc/idempotency';
+import { RedisStorage } from '@nestarc/idempotency/redis';
 import { Redis } from 'ioredis';
 
 const client = new Redis({ host: 'localhost', port: 6379 });
@@ -199,7 +235,8 @@ Or async via `ConfigService`:
 
 ```ts
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { IdempotencyModule, RedisStorage } from '@nestarc/idempotency';
+import { IdempotencyModule } from '@nestarc/idempotency';
+import { RedisStorage } from '@nestarc/idempotency/redis';
 import { Redis } from 'ioredis';
 
 @Module({
@@ -232,7 +269,8 @@ optional sweep service for active cleanup.
 ```ts
 import { Module } from '@nestjs/common';
 import { Pool } from 'pg';
-import { IdempotencyModule, PostgresStorage } from '@nestarc/idempotency';
+import { IdempotencyModule } from '@nestarc/idempotency';
+import { PostgresStorage } from '@nestarc/idempotency/postgres';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -256,7 +294,7 @@ Three options, pick whichever fits your tooling:
    ```
 2. **Code helper (good for tests / scripts):**
    ```ts
-   import { PostgresStorage } from '@nestarc/idempotency';
+   import { PostgresStorage } from '@nestarc/idempotency/postgres';
    await PostgresStorage.createSchema(pool);
    ```
 3. **Auto on module init (development only):**
@@ -280,10 +318,9 @@ service exists only to bound disk usage in long-running deployments:
 ```ts
 import {
   IdempotencyModule,
-  PostgresStorage,
-  PostgresSweepService,
   IDEMPOTENCY_SWEEP_OPTIONS,
 } from '@nestarc/idempotency';
+import { PostgresStorage, PostgresSweepService } from '@nestarc/idempotency/postgres';
 
 @Module({
   imports: [IdempotencyModule.forRoot({ storage: new PostgresStorage({ pool }) })],
@@ -366,7 +403,7 @@ in-flight records expire sooner after a crash:
 
 ```ts
 IdempotencyModule.forRoot({
-  storage: new RedisStorage(redis),
+  storage: new RedisStorage({ client: redis }),
   ttl: 86400,        // replay completed responses for 24 hours
   processingTtl: 60, // release stuck in-flight records after 60 seconds
 });
@@ -407,7 +444,7 @@ v0.4 emits optional outcome events and status headers:
 
 ```ts
 IdempotencyModule.forRoot({
-  storage: new PostgresStorage(pool),
+  storage: new PostgresStorage({ pool }),
   observability: {
     onEvent: (event) => {
       metrics.increment(`idempotency.${event.outcome}`);

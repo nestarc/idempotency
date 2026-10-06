@@ -2,7 +2,7 @@
 
 이 문서는 `@nestarc/idempotency` 1.0.0 개발을 이어갈 때의 시작점이다. [조사 문서](../1.0.0-stabilization-research.md)는 발견 당시의 근거를 보존하고, 이 작업판과 작업별 문서는 구현 상태와 다음 행동을 관리한다.
 
-작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1 구현·검증 완료, S2~S8은 미착수다.** 현재 S1 변경은 작업 트리에 있으며 아직 릴리스하지 않았다. 실제 DB/지원 버전 전체 검증은 S8에 남아 있다.
+작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1·S2 구현·검증 완료, S3~S8은 미착수다.** 아직 릴리스하지 않았다. 실제 DB/지원 버전 전체 검증은 S8에 남아 있다.
 
 ## 문서 사용 순서
 
@@ -28,7 +28,7 @@
 | ID | 작업 | 상태 | 담당 | 최종 통합 전 선행 조건 | 다음 행동 |
 | --- | --- | --- | --- | --- | --- |
 | S1 | [응답 재생 정확성](work-items/S1-response-replay.md) | DONE | Codex | 없음 | D01/지원 표/전환 규칙 인계 완료. S5는 S6 확정 뒤 완료 파이프라인에 통합 |
-| S2 | [소비자 설치와 공개 API](work-items/S2-consumer-package.md) | TODO | 미배정 | 없음 | 선택 peer가 없는 실제 tarball 소비자 fixture 구성 |
+| S2 | [소비자 설치와 공개 API](work-items/S2-consumer-package.md) | DONE | Codex | 없음 | D02 및 S7/S8 인계 완료. S8에서 동일 tarball 소비자 검사를 최종 matrix에 연결 |
 | S3 | [요청 격리와 키 계약](work-items/S3-request-isolation.md) | TODO | 미배정 | 없음 | tenant-only 및 구분자 충돌 회귀 테스트와 D03 결정 |
 | S4 | [관측 정보 보호](work-items/S4-observability.md) | TODO | 미배정 | S3의 namespace, S5의 실패 경로 | 이벤트·로그 전체에서 원본 키 노출 재현 |
 | S5 | [장애와 요청 수명주기](work-items/S5-failure-lifecycle.md) | TODO | 미배정 | S1의 응답 완료 경계, S6의 저장소 계약 | 실패 단계별 상태 전이 표와 동기 throw 재현 |
@@ -68,6 +68,7 @@ npm run test:all -- --runInBand
 | 일시 | 대상 commit 또는 artifact | 환경 | 실행 명령 | 결과와 pass/fail/skip 수 | 증거 위치와 남은 제한 |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-06 | `9610774` + S1 작업 트리 | Node24 / Nest11 / 실제 DB 없음 | prepublishOnly 및 개발 타입 검사 | 293 pass / 41 skip, lint/type/build 성공 | [S1 기록](work-items/S1-response-replay.md), 실제 DB·지원 matrix는 S8 |
+| 2026-10-06 | `c5dff13` + S2 작업 트리 | Node24.11.1 / Nest11.1.18 / Redis7.2.7 / PG16.14 | clean npm ci, prepublishOnly, 타입 검사, 실제 tarball 소비자 | 351 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S2 기록](work-items/S2-consumer-package.md), SHA-256·로그 보존; 최종 matrix는 S8 |
 
 S1 최신 증거: `npm run prepublishOnly`(clean/lint/test/build), 전체 개발 타입 검사 통과.
 **293 pass / 41 skip**(실제 PG29·Redis12). Node24.11.1, Nest common/core11.1.18,
@@ -116,3 +117,4 @@ Express adapter11.1.18/Fastify adapter11.1.19, class-transformer0.5.1.
 | --- | --- |
 | 2026-10-06 | 조사 S1~S8을 작업 문서로 분리하고 상태·결정·검증·인수인계 방식 정의. 구현 미착수. |
 | 2026-10-06 | S1 완료: 최종 직렬화 JSON/Observable 완료 경계, 미지원 응답 정책, legacy409와 opaque body 전환 구현. D01 확정 및 전체 검증/후속 인계 기록. |
+| 2026-10-06 | S2 완료: 선택 peer subpath·공개 타입·격리 tarball 실행기, 실제 Redis/PG 검증. D02 확정 및 S7/S8 인계. |

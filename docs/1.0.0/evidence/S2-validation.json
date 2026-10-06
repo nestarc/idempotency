@@ -1,0 +1,852 @@
+{
+  "date": "2026-10-06",
+  "timezone": "Asia/Seoul",
+  "target": "c5dff136404a135396957258204af8466744f971 + uncommitted S2 working tree; unpublished 0.4.0 tarball",
+  "services": {
+    "redis": "7.2.7",
+    "postgres": "16.14",
+    "isolation": "temporary binaries and test data, loopback only; no production services"
+  },
+  "developerValidation": {
+    "cleanInstall": "npm ci --cache /private/tmp/idempotency-npm-cache --no-audit --no-fund",
+    "typecheck": "npx tsc --noEmit --incremental false -p tsconfig.json",
+    "fullCommand": "TEST_DATABASE_URL=<test-service> TEST_REDIS_URL=<test-service> npm run prepublishOnly",
+    "suitesPassed": 26,
+    "testsPassed": 351,
+    "testsFailed": 0,
+    "testsSkipped": 0,
+    "lint": "pass",
+    "build": "pass",
+    "typecheckResult": "pass",
+    "log": "\n> @nestarc/idempotency@0.4.0 prepublishOnly\n> npm run clean && npm run lint && npm run test:all && npm run build\n\n\n> @nestarc/idempotency@0.4.0 clean\n> rimraf dist coverage\n\n\n> @nestarc/idempotency@0.4.0 lint\n> eslint \"src/**/*.ts\" \"test/**/*.ts\"\n\n\n> @nestarc/idempotency@0.4.0 test:all\n> jest\n\nPASS unit test/regression/postgres-adapter.spec.ts\nPASS unit test/services/postgres-sweep.service.spec.ts\nPASS unit test/storage/postgres.storage.lifecycle.spec.ts\nPASS unit test/regression/response-replay-http.spec.ts\nPASS unit test/regression/response-completion.spec.ts\nPASS unit test/storage/postgres.storage.spec.ts\nPASS unit test/idempotency.interceptor.spec.ts\nPASS unit test/storage/redis.storage.real.spec.ts\n[Nest] 33671  - 10/06/2026, 9:21:46 PM   ERROR [IdempotencyInterceptor] storage.complete() threw for key=\"K-cascade\": redis write failed. Handler succeeded; emitting value without cache. Retries will see 409 until TTL expires.\nPASS unit test/regression/complete-failure-cascade.spec.ts\nPASS unit test/regression/ttl-validation.spec.ts\nPASS unit test/regression/path-based-scope.spec.ts\nPASS unit test/regression/response-replay-boundary.spec.ts\nPASS e2e test/e2e/postgres.e2e-spec.ts\nPASS unit test/idempotency.module.spec.ts\nPASS unit test/regression/race-completed-winner.spec.ts\nPASS unit test/regression/optional-peer-boundary.spec.ts\nPASS unit test/idempotency.decorator.spec.ts\nPASS unit test/utils/stable-json.spec.ts\nPASS unit test/utils/request-scope.spec.ts\nPASS unit test/storage/memory.storage.spec.ts\nPASS unit test/utils/response-headers.spec.ts\nPASS unit test/storage/redis.storage.lifecycle.spec.ts\nPASS unit test/storage/redis.storage.spec.ts\nPASS e2e test/e2e/idempotency.e2e-spec.ts\nPASS unit test/regression/replay-body-format.spec.ts\nPASS e2e test/e2e/fastify.e2e-spec.ts\n\nTest Suites: 26 passed, 26 total\nTests:       351 passed, 351 total\nSnapshots:   0 total\nTime:        6.248 s\nRan all test suites in 2 projects.\n\n> @nestarc/idempotency@0.4.0 build\n> tsc -p tsconfig.build.json\n\n"
+  },
+  "baseline": {
+    "startedAt": "2026-10-06T12:21:18.886Z",
+    "mode": "baseline",
+    "repository": "/Users/ksy/Documents/GitHub/idempotency",
+    "artifacts": "/private/tmp/idempotency-consumers-FDbulO",
+    "node": "v24.11.1",
+    "platform": "darwin/arm64",
+    "typescript": "5.4.5",
+    "moduleResolution": [
+      "node",
+      "node16",
+      "nodenext"
+    ],
+    "services": {
+      "explicitlySkipped": false,
+      "redisUrlProvided": false,
+      "databaseUrlProvided": false
+    },
+    "npm": "11.6.2",
+    "commit": "c5dff136404a135396957258204af8466744f971",
+    "tarball": "/private/tmp/nestarc-idempotency-0.4.0.tgz",
+    "sha256": "3e717a589fd248e0311a18c7a761e5460d68cf2e13a2b7370d78e200055062da",
+    "finishedAt": "2026-10-06T12:21:52.857Z",
+    "result": "pass",
+    "command": "node scripts/consumer-package.mjs --baseline /private/tmp/nestarc-idempotency-0.4.0.tgz",
+    "counts": {
+      "pass": 22,
+      "expected-failure": 14
+    },
+    "checks": [
+      {
+        "name": "npm-version",
+        "status": "pass",
+        "logFile": "01-npm-version.log"
+      },
+      {
+        "name": "git-head",
+        "status": "pass",
+        "logFile": "02-git-head.log"
+      },
+      {
+        "name": "git-status",
+        "status": "pass",
+        "logFile": "03-git-status.log"
+      },
+      {
+        "name": "tarball-files",
+        "status": "pass",
+        "logFile": "04-tarball-files.log"
+      },
+      {
+        "name": "tarball-inventory",
+        "status": "pass",
+        "files": 80
+      },
+      {
+        "name": "memory-initial-lock",
+        "status": "pass",
+        "logFile": "05-memory-initial-lock.log"
+      },
+      {
+        "name": "memory-initial-ci",
+        "status": "pass",
+        "logFile": "06-memory-initial-ci.log"
+      },
+      {
+        "name": "memory-initial-npm-ls",
+        "status": "pass",
+        "logFile": "07-memory-initial-npm-ls.log"
+      },
+      {
+        "name": "memory-initial-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": []
+      },
+      {
+        "name": "memory-node-import",
+        "status": "expected-failure",
+        "exitCode": 1,
+        "logFile": "08-memory-node-import.log"
+      },
+      {
+        "name": "memory-baseline-node",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "09-memory-baseline-node.log"
+      },
+      {
+        "name": "memory-baseline-node16",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "10-memory-baseline-node16.log"
+      },
+      {
+        "name": "memory-baseline-nodenext",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "11-memory-baseline-nodenext.log"
+      },
+      {
+        "name": "redis-initial-lock",
+        "status": "pass",
+        "logFile": "12-redis-initial-lock.log"
+      },
+      {
+        "name": "redis-initial-ci",
+        "status": "pass",
+        "logFile": "13-redis-initial-ci.log"
+      },
+      {
+        "name": "redis-initial-npm-ls",
+        "status": "pass",
+        "logFile": "14-redis-initial-npm-ls.log"
+      },
+      {
+        "name": "redis-initial-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "ioredis"
+        ]
+      },
+      {
+        "name": "redis-node-import",
+        "status": "expected-failure",
+        "exitCode": 1,
+        "logFile": "15-redis-node-import.log"
+      },
+      {
+        "name": "redis-baseline-node",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "16-redis-baseline-node.log"
+      },
+      {
+        "name": "redis-baseline-node16",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "17-redis-baseline-node16.log"
+      },
+      {
+        "name": "redis-baseline-nodenext",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "18-redis-baseline-nodenext.log"
+      },
+      {
+        "name": "postgres-without-pg-types-lock",
+        "status": "pass",
+        "logFile": "19-postgres-without-pg-types-lock.log"
+      },
+      {
+        "name": "postgres-without-pg-types-ci",
+        "status": "pass",
+        "logFile": "20-postgres-without-pg-types-ci.log"
+      },
+      {
+        "name": "postgres-without-pg-types-npm-ls",
+        "status": "pass",
+        "logFile": "21-postgres-without-pg-types-npm-ls.log"
+      },
+      {
+        "name": "postgres-without-pg-types-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "pg"
+        ]
+      },
+      {
+        "name": "postgres-node-import",
+        "status": "pass",
+        "logFile": "22-postgres-node-import.log"
+      },
+      {
+        "name": "postgres-baseline-node",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "23-postgres-baseline-node.log"
+      },
+      {
+        "name": "postgres-baseline-node16",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "24-postgres-baseline-node16.log"
+      },
+      {
+        "name": "postgres-baseline-nodenext",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "25-postgres-baseline-nodenext.log"
+      },
+      {
+        "name": "postgres-with-pg-types-lock",
+        "status": "pass",
+        "logFile": "26-postgres-with-pg-types-lock.log"
+      },
+      {
+        "name": "postgres-with-pg-types-ci",
+        "status": "pass",
+        "logFile": "27-postgres-with-pg-types-ci.log"
+      },
+      {
+        "name": "postgres-with-pg-types-npm-ls",
+        "status": "pass",
+        "logFile": "28-postgres-with-pg-types-npm-ls.log"
+      },
+      {
+        "name": "postgres-with-pg-types-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "pg",
+          "@types/pg"
+        ]
+      },
+      {
+        "name": "postgres-with-pg-types-node",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "29-postgres-with-pg-types-node.log"
+      },
+      {
+        "name": "postgres-with-pg-types-node16",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "30-postgres-with-pg-types-node16.log"
+      },
+      {
+        "name": "postgres-with-pg-types-nodenext",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "31-postgres-with-pg-types-nodenext.log"
+      }
+    ]
+  },
+  "initialTypeScript54Candidate": {
+    "startedAt": "2026-10-06T12:22:36.492Z",
+    "mode": "candidate",
+    "repository": "/Users/ksy/Documents/GitHub/idempotency",
+    "artifacts": "/private/tmp/idempotency-consumers-HOq1zB",
+    "node": "v24.11.1",
+    "platform": "darwin/arm64",
+    "typescript": "5.4.5",
+    "moduleResolution": [
+      "node",
+      "node16",
+      "nodenext"
+    ],
+    "services": {
+      "explicitlySkipped": false,
+      "redisUrlProvided": true,
+      "databaseUrlProvided": true
+    },
+    "npm": "11.6.2",
+    "commit": "c5dff136404a135396957258204af8466744f971",
+    "tarball": "/private/tmp/idempotency-consumers-HOq1zB/nestarc-idempotency-0.4.0.tgz",
+    "sha256": "b9add395d6150308ffa34066f7cf75979af0bb144345eb2e1daf3baf61ac8bf2",
+    "finishedAt": "2026-10-06T12:22:56.900Z",
+    "result": "fail",
+    "command": "TEST_REDIS_URL=<test-service> TEST_DATABASE_URL=<test-service> node scripts/consumer-package.mjs (initial TypeScript 5.4.5 fixture)",
+    "counts": {
+      "pass": 36,
+      "expected-failure": 3,
+      "fail": 1
+    },
+    "checks": [
+      {
+        "name": "npm-version",
+        "status": "pass",
+        "logFile": "01-npm-version.log"
+      },
+      {
+        "name": "git-head",
+        "status": "pass",
+        "logFile": "02-git-head.log"
+      },
+      {
+        "name": "git-status",
+        "status": "pass",
+        "logFile": "03-git-status.log"
+      },
+      {
+        "name": "build",
+        "status": "pass",
+        "logFile": "04-build.log"
+      },
+      {
+        "name": "pack",
+        "status": "pass",
+        "logFile": "05-pack.log"
+      },
+      {
+        "name": "tarball-files",
+        "status": "pass",
+        "logFile": "06-tarball-files.log"
+      },
+      {
+        "name": "tarball-inventory",
+        "status": "pass",
+        "files": 92
+      },
+      {
+        "name": "memory-initial-lock",
+        "status": "pass",
+        "logFile": "07-memory-initial-lock.log"
+      },
+      {
+        "name": "memory-initial-ci",
+        "status": "pass",
+        "logFile": "08-memory-initial-ci.log"
+      },
+      {
+        "name": "memory-initial-npm-ls",
+        "status": "pass",
+        "logFile": "09-memory-initial-npm-ls.log"
+      },
+      {
+        "name": "memory-initial-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": []
+      },
+      {
+        "name": "memory-node-import",
+        "status": "pass",
+        "logFile": "10-memory-node-import.log"
+      },
+      {
+        "name": "memory-strict-node",
+        "status": "pass",
+        "logFile": "11-memory-strict-node.log"
+      },
+      {
+        "name": "memory-strict-node16",
+        "status": "pass",
+        "logFile": "12-memory-strict-node16.log"
+      },
+      {
+        "name": "memory-strict-nodenext",
+        "status": "pass",
+        "logFile": "13-memory-strict-nodenext.log"
+      },
+      {
+        "name": "memory-runtime",
+        "status": "pass",
+        "logFile": "14-memory-runtime.log"
+      },
+      {
+        "name": "memory-storage-smoke",
+        "status": "pass"
+      },
+      {
+        "name": "redis-initial-lock",
+        "status": "pass",
+        "logFile": "15-redis-initial-lock.log"
+      },
+      {
+        "name": "redis-initial-ci",
+        "status": "pass",
+        "logFile": "16-redis-initial-ci.log"
+      },
+      {
+        "name": "redis-initial-npm-ls",
+        "status": "pass",
+        "logFile": "17-redis-initial-npm-ls.log"
+      },
+      {
+        "name": "redis-initial-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "ioredis"
+        ]
+      },
+      {
+        "name": "redis-node-import",
+        "status": "pass",
+        "logFile": "18-redis-node-import.log"
+      },
+      {
+        "name": "redis-strict-node",
+        "status": "pass",
+        "logFile": "19-redis-strict-node.log"
+      },
+      {
+        "name": "redis-strict-node16",
+        "status": "pass",
+        "logFile": "20-redis-strict-node16.log"
+      },
+      {
+        "name": "redis-strict-nodenext",
+        "status": "pass",
+        "logFile": "21-redis-strict-nodenext.log"
+      },
+      {
+        "name": "redis-runtime",
+        "status": "pass",
+        "logFile": "22-redis-runtime.log"
+      },
+      {
+        "name": "redis-storage-smoke",
+        "status": "pass"
+      },
+      {
+        "name": "postgres-without-pg-types-lock",
+        "status": "pass",
+        "logFile": "23-postgres-without-pg-types-lock.log"
+      },
+      {
+        "name": "postgres-without-pg-types-ci",
+        "status": "pass",
+        "logFile": "24-postgres-without-pg-types-ci.log"
+      },
+      {
+        "name": "postgres-without-pg-types-npm-ls",
+        "status": "pass",
+        "logFile": "25-postgres-without-pg-types-npm-ls.log"
+      },
+      {
+        "name": "postgres-without-pg-types-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "pg"
+        ]
+      },
+      {
+        "name": "postgres-node-import",
+        "status": "pass",
+        "logFile": "26-postgres-node-import.log"
+      },
+      {
+        "name": "postgres-without-pg-types-node",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "27-postgres-without-pg-types-node.log"
+      },
+      {
+        "name": "postgres-without-pg-types-node16",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "28-postgres-without-pg-types-node16.log"
+      },
+      {
+        "name": "postgres-without-pg-types-nodenext",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "29-postgres-without-pg-types-nodenext.log"
+      },
+      {
+        "name": "postgres-with-pg-types-lock",
+        "status": "pass",
+        "logFile": "30-postgres-with-pg-types-lock.log"
+      },
+      {
+        "name": "postgres-with-pg-types-ci",
+        "status": "pass",
+        "logFile": "31-postgres-with-pg-types-ci.log"
+      },
+      {
+        "name": "postgres-with-pg-types-npm-ls",
+        "status": "pass",
+        "logFile": "32-postgres-with-pg-types-npm-ls.log"
+      },
+      {
+        "name": "postgres-with-pg-types-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "pg",
+          "@types/pg"
+        ]
+      },
+      {
+        "name": "postgres-consumer",
+        "status": "fail",
+        "error": "AssertionError [ERR_ASSERTION]: postgres-with-pg-types-node: failed (2); see /private/tmp/idempotency-consumers-HOq1zB/33-postgres-with-pg-types-node.log\nnode_modules/pg-protocol/dist/serializer.d.ts(34,18): error TS2315: Type 'Buffer' is not generic.\nnode_modules/pg-protocol/dist/serializer.d.ts(35,17): error TS2315: Type 'Buffer' is not generic.\nnode_modules/pg-protocol/dist/serializer.d.ts(36,16): error TS2315: Type 'Buffer' is not generic.\nnode_modules/pg-protocol/dist/serializer.d.ts(38,21): error TS2315: Type 'Buffer' is not generic.\n\n\n2 !== 0\n\n    at execute (file:///Users/ksy/Documents/GitHub/idempotency/scripts/consumer-package.mjs:101:12)\n    at compile (file:///Users/ksy/Documents/GitHub/idempotency/scripts/consumer-package.mjs:204:5)\n    at file:///Users/ksy/Documents/GitHub/idempotency/scripts/consumer-package.mjs:342:9\n    at ModuleJob.run (node:internal/modules/esm/module_job:377:25)\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:671:26)\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)"
+      }
+    ]
+  },
+  "finalCandidate": {
+    "startedAt": "2026-10-06T12:25:06.555Z",
+    "mode": "candidate",
+    "repository": "/Users/ksy/Documents/GitHub/idempotency",
+    "artifacts": "/private/tmp/idempotency-consumers-v8lDiK",
+    "node": "v24.11.1",
+    "platform": "darwin/arm64",
+    "typescript": "5.7.3",
+    "moduleResolution": [
+      "node",
+      "node16",
+      "nodenext"
+    ],
+    "services": {
+      "explicitlySkipped": false,
+      "redisUrlProvided": true,
+      "databaseUrlProvided": true
+    },
+    "npm": "11.6.2",
+    "commit": "c5dff136404a135396957258204af8466744f971",
+    "tarball": "/private/tmp/idempotency-consumers-v8lDiK/nestarc-idempotency-0.4.0.tgz",
+    "sha256": "3388c4bb8ad81c516fad086b881011dbfd820eb01bf48f077088ef0b55579f6f",
+    "finishedAt": "2026-10-06T12:25:29.874Z",
+    "result": "pass",
+    "command": "TEST_REDIS_URL=<test-service> TEST_DATABASE_URL=<test-service> npm run test:consumers",
+    "counts": {
+      "pass": 41,
+      "expected-failure": 3
+    },
+    "checks": [
+      {
+        "name": "npm-version",
+        "status": "pass",
+        "logFile": "01-npm-version.log"
+      },
+      {
+        "name": "git-head",
+        "status": "pass",
+        "logFile": "02-git-head.log"
+      },
+      {
+        "name": "git-status",
+        "status": "pass",
+        "logFile": "03-git-status.log"
+      },
+      {
+        "name": "build",
+        "status": "pass",
+        "logFile": "04-build.log"
+      },
+      {
+        "name": "pack",
+        "status": "pass",
+        "logFile": "05-pack.log"
+      },
+      {
+        "name": "tarball-files",
+        "status": "pass",
+        "logFile": "06-tarball-files.log"
+      },
+      {
+        "name": "tarball-inventory",
+        "status": "pass",
+        "files": 92
+      },
+      {
+        "name": "memory-initial-lock",
+        "status": "pass",
+        "logFile": "07-memory-initial-lock.log"
+      },
+      {
+        "name": "memory-initial-ci",
+        "status": "pass",
+        "logFile": "08-memory-initial-ci.log"
+      },
+      {
+        "name": "memory-initial-npm-ls",
+        "status": "pass",
+        "logFile": "09-memory-initial-npm-ls.log"
+      },
+      {
+        "name": "memory-initial-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": []
+      },
+      {
+        "name": "memory-node-import",
+        "status": "pass",
+        "logFile": "10-memory-node-import.log"
+      },
+      {
+        "name": "memory-strict-node",
+        "status": "pass",
+        "logFile": "11-memory-strict-node.log"
+      },
+      {
+        "name": "memory-strict-node16",
+        "status": "pass",
+        "logFile": "12-memory-strict-node16.log"
+      },
+      {
+        "name": "memory-strict-nodenext",
+        "status": "pass",
+        "logFile": "13-memory-strict-nodenext.log"
+      },
+      {
+        "name": "memory-runtime",
+        "status": "pass",
+        "logFile": "14-memory-runtime.log"
+      },
+      {
+        "name": "memory-storage-smoke",
+        "status": "pass"
+      },
+      {
+        "name": "redis-initial-lock",
+        "status": "pass",
+        "logFile": "15-redis-initial-lock.log"
+      },
+      {
+        "name": "redis-initial-ci",
+        "status": "pass",
+        "logFile": "16-redis-initial-ci.log"
+      },
+      {
+        "name": "redis-initial-npm-ls",
+        "status": "pass",
+        "logFile": "17-redis-initial-npm-ls.log"
+      },
+      {
+        "name": "redis-initial-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "ioredis"
+        ]
+      },
+      {
+        "name": "redis-node-import",
+        "status": "pass",
+        "logFile": "18-redis-node-import.log"
+      },
+      {
+        "name": "redis-strict-node",
+        "status": "pass",
+        "logFile": "19-redis-strict-node.log"
+      },
+      {
+        "name": "redis-strict-node16",
+        "status": "pass",
+        "logFile": "20-redis-strict-node16.log"
+      },
+      {
+        "name": "redis-strict-nodenext",
+        "status": "pass",
+        "logFile": "21-redis-strict-nodenext.log"
+      },
+      {
+        "name": "redis-runtime",
+        "status": "pass",
+        "logFile": "22-redis-runtime.log"
+      },
+      {
+        "name": "redis-storage-smoke",
+        "status": "pass"
+      },
+      {
+        "name": "postgres-without-pg-types-lock",
+        "status": "pass",
+        "logFile": "23-postgres-without-pg-types-lock.log"
+      },
+      {
+        "name": "postgres-without-pg-types-ci",
+        "status": "pass",
+        "logFile": "24-postgres-without-pg-types-ci.log"
+      },
+      {
+        "name": "postgres-without-pg-types-npm-ls",
+        "status": "pass",
+        "logFile": "25-postgres-without-pg-types-npm-ls.log"
+      },
+      {
+        "name": "postgres-without-pg-types-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "pg"
+        ]
+      },
+      {
+        "name": "postgres-node-import",
+        "status": "pass",
+        "logFile": "26-postgres-node-import.log"
+      },
+      {
+        "name": "postgres-without-pg-types-node",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "27-postgres-without-pg-types-node.log"
+      },
+      {
+        "name": "postgres-without-pg-types-node16",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "28-postgres-without-pg-types-node16.log"
+      },
+      {
+        "name": "postgres-without-pg-types-nodenext",
+        "status": "expected-failure",
+        "exitCode": 2,
+        "logFile": "29-postgres-without-pg-types-nodenext.log"
+      },
+      {
+        "name": "postgres-with-pg-types-lock",
+        "status": "pass",
+        "logFile": "30-postgres-with-pg-types-lock.log"
+      },
+      {
+        "name": "postgres-with-pg-types-ci",
+        "status": "pass",
+        "logFile": "31-postgres-with-pg-types-ci.log"
+      },
+      {
+        "name": "postgres-with-pg-types-npm-ls",
+        "status": "pass",
+        "logFile": "32-postgres-with-pg-types-npm-ls.log"
+      },
+      {
+        "name": "postgres-with-pg-types-isolation",
+        "status": "pass",
+        "nodePath": "unset",
+        "globalSearchPaths": "disabled",
+        "packageSymlinks": false,
+        "ancestorNodeModules": false,
+        "optionalDependenciesPresent": [
+          "pg",
+          "@types/pg"
+        ]
+      },
+      {
+        "name": "postgres-with-pg-types-node",
+        "status": "pass",
+        "logFile": "33-postgres-with-pg-types-node.log"
+      },
+      {
+        "name": "postgres-with-pg-types-node16",
+        "status": "pass",
+        "logFile": "34-postgres-with-pg-types-node16.log"
+      },
+      {
+        "name": "postgres-with-pg-types-nodenext",
+        "status": "pass",
+        "logFile": "35-postgres-with-pg-types-nodenext.log"
+      },
+      {
+        "name": "postgres-runtime",
+        "status": "pass",
+        "logFile": "36-postgres-runtime.log"
+      },
+      {
+        "name": "postgres-storage-smoke",
+        "status": "pass"
+      }
+    ]
+  },
+  "selectedLogs": [
+    {
+      "run": "idempotency-consumers-FDbulO",
+      "check": "memory-node-import",
+      "log": "$ /usr/local/bin/node --no-global-search-paths -e require(\"@nestarc/idempotency\")\nnode:internal/modules/cjs/loader:1424\n  throw err;\n  ^\n\nError: Cannot find module 'pg'\nRequire stack:\n- /private/tmp/idempotency-consumers-FDbulO/memory/node_modules/@nestarc/idempotency/dist/storage/postgres.storage.js\n- /private/tmp/idempotency-consumers-FDbulO/memory/node_modules/@nestarc/idempotency/dist/index.js\n- /private/tmp/idempotency-consumers-FDbulO/memory/[eval]\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1421:15)\n    at defaultResolveImpl (node:internal/modules/cjs/loader:1059:19)\n    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1064:22)\n    at Module._load (node:internal/modules/cjs/loader:1227:37)\n    at TracingChannel.traceSync (node:diagnostics_channel:328:14)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)\n    at Module.require (node:internal/modules/cjs/loader:1504:12)\n    at require (node:internal/modules/helpers:152:16)\n    at Object.<anonymous> (/private/tmp/idempotency-consumers-FDbulO/memory/node_modules/@nestarc/idempotency/dist/storage/postgres.storage.js:17:14)\n    at Module._compile (node:internal/modules/cjs/loader:1761:14) {\n  code: 'MODULE_NOT_FOUND',\n  requireStack: [\n    '/private/tmp/idempotency-consumers-FDbulO/memory/node_modules/@nestarc/idempotency/dist/storage/postgres.storage.js',\n    '/private/tmp/idempotency-consumers-FDbulO/memory/node_modules/@nestarc/idempotency/dist/index.js',\n    '/private/tmp/idempotency-consumers-FDbulO/memory/[eval]'\n  ]\n}\n\nNode.js v24.11.1\n"
+    },
+    {
+      "run": "idempotency-consumers-FDbulO",
+      "check": "memory-baseline-node",
+      "log": "$ /usr/local/bin/node --no-global-search-paths node_modules/typescript/bin/tsc --noEmit --moduleResolution node --module commonjs --strict --skipLibCheck false --target ES2022 --esModuleInterop true common/baseline.ts\nnode_modules/@nestarc/idempotency/dist/storage/postgres.storage.d.ts(2,39): error TS2307: Cannot find module 'pg' or its corresponding type declarations.\nnode_modules/@nestarc/idempotency/dist/storage/redis.storage.d.ts(2,42): error TS2307: Cannot find module 'ioredis' or its corresponding type declarations.\n"
+    },
+    {
+      "run": "idempotency-consumers-FDbulO",
+      "check": "postgres-baseline-node",
+      "log": "$ /usr/local/bin/node --no-global-search-paths node_modules/typescript/bin/tsc --noEmit --moduleResolution node --module commonjs --strict --skipLibCheck false --target ES2022 --esModuleInterop true common/baseline.ts\nnode_modules/@nestarc/idempotency/dist/storage/postgres.storage.d.ts(2,39): error TS7016: Could not find a declaration file for module 'pg'. '/private/tmp/idempotency-consumers-FDbulO/postgres/node_modules/pg/lib/index.js' implicitly has an 'any' type.\n  Try `npm i --save-dev @types/pg` if it exists or add a new declaration (.d.ts) file containing `declare module 'pg';`\nnode_modules/@nestarc/idempotency/dist/storage/redis.storage.d.ts(2,42): error TS2307: Cannot find module 'ioredis' or its corresponding type declarations.\n"
+    },
+    {
+      "run": "idempotency-consumers-HOq1zB",
+      "check": "postgres-with-pg-types-node",
+      "log": "$ /usr/local/bin/node --no-global-search-paths node_modules/typescript/bin/tsc --noEmit --moduleResolution node --module commonjs -p tsconfig.json\nnode_modules/pg-protocol/dist/serializer.d.ts(34,18): error TS2315: Type 'Buffer' is not generic.\nnode_modules/pg-protocol/dist/serializer.d.ts(35,17): error TS2315: Type 'Buffer' is not generic.\nnode_modules/pg-protocol/dist/serializer.d.ts(36,16): error TS2315: Type 'Buffer' is not generic.\nnode_modules/pg-protocol/dist/serializer.d.ts(38,21): error TS2315: Type 'Buffer' is not generic.\n"
+    },
+    {
+      "run": "idempotency-consumers-v8lDiK",
+      "check": "memory-runtime",
+      "log": "$ /usr/local/bin/node --no-global-search-paths runtime.cjs\nPASS unselected dependencies absent: pg, ioredis, @types/pg/package.json\nPASS official assets resolve and private package paths are blocked\nPASS adapter import is lazy and missing-driver constructors explain installation\nPASS memory create/get/complete/delete\nPASS memory NestFactory.create/init/close\n"
+    },
+    {
+      "run": "idempotency-consumers-v8lDiK",
+      "check": "redis-runtime",
+      "log": "$ /usr/local/bin/node --no-global-search-paths runtime.cjs\nPASS unselected dependencies absent: pg, @types/pg/package.json\nPASS official assets resolve and private package paths are blocked\nPASS redis create/get/complete/delete\nPASS redis NestFactory.create/init/close\n"
+    },
+    {
+      "run": "idempotency-consumers-v8lDiK",
+      "check": "postgres-runtime",
+      "log": "$ /usr/local/bin/node --no-global-search-paths runtime.cjs\nPASS unselected dependencies absent: ioredis\nPASS official assets resolve and private package paths are blocked\nPASS postgres create/get/complete/delete\nPASS postgres NestFactory.create/init/close\n"
+    },
+    {
+      "run": "idempotency-consumers-v8lDiK",
+      "check": "postgres-without-pg-types-node",
+      "log": "$ /usr/local/bin/node --no-global-search-paths node_modules/typescript/bin/tsc --noEmit --moduleResolution node --module commonjs -p tsconfig.json\nconsumer.ts(7,22): error TS7016: Could not find a declaration file for module 'pg'. '/private/tmp/idempotency-consumers-v8lDiK/postgres/node_modules/pg/lib/index.js' implicitly has an 'any' type.\n  Try `npm i --save-dev @types/pg` if it exists or add a new declaration (.d.ts) file containing `declare module 'pg';`\nnode_modules/@nestarc/idempotency/dist/storage/postgres.storage.d.ts(2,39): error TS7016: Could not find a declaration file for module 'pg'. '/private/tmp/idempotency-consumers-v8lDiK/postgres/node_modules/pg/lib/index.js' implicitly has an 'any' type.\n  Try `npm i --save-dev @types/pg` if it exists or add a new declaration (.d.ts) file containing `declare module 'pg';`\n"
+    }
+  ],
+  "limitations": [
+    "Representative Node24/Nest11/Express environment only; S8 owns final Node/Nest matrix and publication-artifact identity.",
+    "Full generated consumer lockfiles, npm ls trees and logs are retained in each run artifacts directory. S8 must upload those directories as CI artifacts.",
+    "Initial 5.4.5 failure directory PostgreSQL compiler was upgraded in-place to5.7.3 for diagnosis after the recorded failure; original failure logs are preserved.",
+    "No publish/tag/push performed."
+  ]
+}

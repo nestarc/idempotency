@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Memory-only imports and strict declaration checking no longer require pg,
+  ioredis or @types/pg. Optional drivers load when constructing an owned
+  connection, with an actionable installation error when absent.
+
 - Capture the final value only after successful completion of an ordinary HTTP
   Observable. Intermediate emissions are never replayed; EMPTY is an empty response.
 - Exclude class instances and unsupported nested values from replay capture.
@@ -19,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storage access. Detect passthrough handlers that already sent the response.
 
 ### Changed
+
+- **Breaking import transition for 1.0:** RedisStorage/RedisStorageOptions now
+  use `@nestarc/idempotency/redis`; PostgresStorage/PostgresStorageOptions and
+  PostgresSweepService/SweepOptions use `@nestarc/idempotency/postgres`. Internal
+  dist paths are not public exports. PostgreSQL TypeScript consumers explicitly
+  install `@types/pg`; Memory/Redis consumers do not need it.
+- Export key/fingerprint resolver and observability callback/event types from
+  the root. Add isolated tarball consumers for strict TypeScript 5.7.3 CommonJS
+  node/node16/nodenext resolution, Nest lifecycle and real database smoke checks.
 
 - **Breaking storage-format transition:** new response bodies use a versioned
   opaque string, including empty responses. Legacy/corrupt records return 409

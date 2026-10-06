@@ -3,19 +3,8 @@ export { IdempotencyModule } from './idempotency.module';
 export { IdempotencyInterceptor } from './idempotency.interceptor';
 export { Idempotent } from './idempotency.decorator';
 
-// Storage adapters
+// Driver-free storage. Optional adapters have their own package subpaths.
 export { MemoryStorage } from './storage/memory.storage';
-export { RedisStorage, type RedisStorageOptions } from './storage/redis.storage';
-export {
-  PostgresStorage,
-  type PostgresStorageOptions,
-} from './storage/postgres.storage';
-
-// Optional services
-export {
-  PostgresSweepService,
-  type SweepOptions,
-} from './services/postgres-sweep.service';
 
 // Constants (injection tokens, metadata key, defaults)
 export {
@@ -46,4 +35,10 @@ export type {
   ReplayHeadersOption,
   IdempotentOptions,
   IdempotentMetadata,
+  IdempotencyKeyResolver,
+  IdempotencyFingerprintInput,
+  IdempotencyFingerprintResolver,
+  IdempotencyEvent,
+  IdempotencyOutcome,
+  IdempotencyObservabilityOptions,
 } from './interfaces/idempotency-options.interface';

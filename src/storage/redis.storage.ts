@@ -9,6 +9,7 @@ import type {
   MutateResult,
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
+import { isMissingPeer } from '../utils/optional-peer';
 
 /**
  * Constructor options for {@link RedisStorage}.
@@ -43,6 +44,24 @@ interface SerializedPayload {
 }
 
 const DEFAULT_KEY_PREFIX = 'idempotency:';
+
+function createClient(connection: RedisOptions): Redis {
+  let RedisCtor: new (options: RedisOptions) => Redis;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    RedisCtor = require('ioredis') as new (options: RedisOptions) => Redis;
+  } catch (error) {
+    if (isMissingPeer(error, 'ioredis')) {
+      throw new Error(
+        'RedisStorage: optional peer `ioredis` is required when using `connection`. ' +
+          'Install it with `npm install ioredis`.',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return new RedisCtor(connection);
+}
 
 // ioredis's custom command typing is looser than the declared Redis class.
 // We widen the client type locally so the injected Lua commands are callable.
@@ -86,17 +105,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
       baseClient = options.client;
       this.ownsClient = false;
     } else if (options.connection) {
-      const factory =
-        options.clientFactory ??
-        ((connection: RedisOptions): Redis => {
-          // Lazy require so consumers without ioredis installed are unaffected
-          // unless they actually exercise this code path.
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const RedisCtor = require('ioredis') as new (
-            opts: RedisOptions,
-          ) => Redis;
-          return new RedisCtor(connection);
-        });
+      const factory = options.clientFactory ?? createClient;
       baseClient = factory(options.connection);
       this.ownsClient = true;
     } else {

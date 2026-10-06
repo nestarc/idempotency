@@ -77,7 +77,7 @@ fixture dependency/lockfile/스크립트는 저장소에 선언한다. 조사자
 - [CI workflow](../../../.github/workflows/ci.yml), [Release workflow](../../../.github/workflows/release.yml), [package.json](../../../package.json).
 - [Jest 설정](../../../jest.config.ts), [PG compose](../../../docker-compose.yml), [Express E2E](../../../test/e2e/idempotency.e2e-spec.ts).
 - [Fastify E2E](../../../test/e2e/fastify.e2e-spec.ts), [PG E2E](../../../test/e2e/postgres.e2e-spec.ts), [실제 Redis spec](../../../test/storage/redis.storage.real.spec.ts).
-- [S2 소비자 배포물 작업](S2-consumer-package.md), [S6 공통 계약 작업](S6-storage-contract.md). fixture 실행 명령은 두 작업 완료 시 실제 경로로 연결한다.
+- [S2 소비자 배포물 작업](S2-consumer-package.md), [S6 공통 계약 작업](S6-storage-contract.md). S2 fixture 실행 명령은 `npm run test:consumers -- --tarball <artifact>`이며 S6 변경을 같은 artifact에 반영한다.
 
 ## 검증 명령과 환경
 
@@ -98,6 +98,27 @@ S2의 package 경계, S6의 상태 계약, S7의 실행 예제와 마이그레�
 
 ## 다음 작업자에게
 
+### S2 인수인계 (2026-10-06)
+
+[소비자 실행기](../../../scripts/consumer-package.mjs)와 [fixture 안내](../../../test/consumers/README.md)를 추가했다.
+`npm run test:consumers -- --tarball /absolute/path/package.tgz`로 게시 후보와 같은 artifact를 설치한다.
+옵션 없이 실행하면 build/pack까지 수행한다. TEST_REDIS_URL/TEST_DATABASE_URL을 모두 제공해야 실제 DB 필수 검사에 통과한다.
+`--skip-services`는 명시적인 부분 검사이며 summary.result가 pass-with-skips다. 출시 gate는 이를 성공으로 인정하지 않는다.
+실행은 소스 밖에서 lockfile 생성·npm ci·npm ls·선택 peer 부재·strict 공개 타입·Node import·Nest init/close·DB CRUD를 검사한다.
+NODE_PATH/전역 경로·상위 node_modules·symlink 누출을 방지한다.
+
+fixture는 Nest11.1.18, TS5.7.3, @types/node20.19.39, ioredis5.10.1, pg/@types/pg8.20.0으로 직접 의존성을 고정했다.
+PG는 @types/pg 미설치 TS7016을 기대된 실패로 검사한 뒤 명시적으로 타입을 설치한다.
+TS5.4.5 후보는 현재 pg-protocol1.16.1과의 generic Buffer 선언 호환 문제로 실패하여 D02 하한을5.7.3으로 정했다.
+전체 개발 테스트는 실제 Redis7.2.7/PG16.14에서 **26 suite / 351 pass / 0 skip**이다.
+최종 소비자 결과와 checksum·실행 로그는 [S2 증거](S2-consumer-package.md#검증-증거--2026-10-06) 및
+[보존 JSON](../evidence/S2-validation.json)을 참조한다.
+
+S8에서 각 matrix 셀의 dependency 버전 선택을 연결하고 생성된 소비자 lockfile·npm ls·summary·로그·tarball을 CI artifact로 보존한다.
+검증한 SHA-256과 게시할 입력을 일치시킨다. 현재 runner가 자동으로 지원 matrix 전체나 workflow를 변경하지는 않는다.
+S1 시점41 skip은 이번 대표 실제 DB 환경에서 해소됐지만 S8의 최종 지원 조합/RC/출시 검증 완료를 뜻하지 않는다.
+
+
 ### S1 인수인계 (2026-10-06)
 
 [S1 검증](S1-response-replay.md#검증-증거-2026-10-06)은 Node24.11.1/Nest11.1.18,
@@ -111,5 +132,5 @@ S1 완료는 S8 또는 1.0 출시 승인으로 해석하지 않는다.
 
 - 초기 기록: 구현 미착수. 마지막 갱신 2026-10-06.
 - 다음 행동: S8-1 지원 matrix를 결정하고 S8-2의 검증 전용 PG/Redis 잡 골격부터 준비한다.
-- 남은 이슈: 지원 정책·artifact 게시 방식 미결; S2–S7 완료와 실제 서비스 통합 검증 대기.
+- 남은 이슈: 지원 정책·artifact 게시 방식 미결; S3–S7 완료와 최종 지원 matrix 통합 검증 대기. S2 대표 환경 증거는 위 인계 참조.
 - S8 자체 구현 검증 증거: 미기록. 위 S1 결과의41개 skip을 최종 출시 통과로 재사용하지 않는다.

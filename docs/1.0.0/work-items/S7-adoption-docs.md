@@ -58,6 +58,22 @@ npm run build
 
 ## 다음 작업자에게
 
+### S2 인수인계 (2026-10-06)
+
+[D02](../decisions.md#d02--선택-의존성과-공개-import-경계-decided)는 확정됐다. root는 Memory/common만 제공한다.
+기존 root의 RedisStorage/RedisStorageOptions는 `@nestarc/idempotency/redis`,
+PostgresStorage/PostgresStorageOptions/PostgresSweepService/SweepOptions는 `@nestarc/idempotency/postgres`로 옮긴다.
+Memory 소비자는 pg/ioredis/@types/pg를 설치하지 않으며, Redis는 ioredis만, PG TypeScript 소비자는 pg와 개발 의존성 @types/pg를 설치한다.
+공식 SQL 경로는 `@nestarc/idempotency/sql/init.sql`이고 dist 내부 경로는 export하지 않는다.
+key/fingerprint resolver·input과 event/outcome/observability options 타입은 root에서 공개된다.
+
+최소 검증 TS는5.7.3, strict/skipLibCheck:false, CJS 소비자의 node/node16/nodenext다.
+초기5.4.5는 현재 pg-protocol/@types/node의 generic Buffer 선언 충돌로 실패했으므로 낮은 하한을 약속하지 않는다.
+README 설치·import·생성자 오기 및 CHANGELOG를 갱신했지만 sweep DI·수명주기 예제 완성은 S7에 남긴다.
+[소비자 fixture](../../../test/consumers/README.md)는 실제 tarball의 공개 경로·공개 타입·Nest init/close와 실제 DB smoke를 제공한다.
+이 결과가 README의 모든 recipe 또는 sweep DI 검증을 뜻하지 않는다. 키/schema 변경은 S2에 없으며 S1 데이터 전환 규칙은 별개다.
+
+
 ### S1 인수인계 (2026-10-06)
 
 D01은 확정됐다. [S1 지원 표·전환 절차](S1-response-replay.md)와 README의 새 response contract를
@@ -67,8 +83,8 @@ legacy/corrupt COMPLETED도409이며 새 body는 opaque string이다. 키/schema
 구/신 reader·writer 혼합 배포/롤백을 지원하지 않으며 traffic pause→drain→전체 교체가 필요하다.
 기존 키 삭제·자동 회전으로409를 피하도록 안내하지 않는다. S3의 향후 키 전환과 함께 D07을 마무리한다.
 
-- 마지막 갱신: 2026-10-06. S7 자체 구현·예제 검증 미착수. S1의 README/CHANGELOG 계약 갱신은 위 인계 참조.
+- 마지막 갱신: 2026-10-06. S7 자체 구현·예제 검증 미착수. S1·S2의 README/CHANGELOG 계약 갱신은 위 인계 참조.
 - 다음 행동: README sweep 블록을 소비자 TestModule로 재현하고 필요한 provider와 실제 소유한 Pool이 같은지 확인한다.
-- 미결: D07 및 선행 D02~D06. D01은 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
+- 미결: D07 및 선행 D03~D06. D01·D02는 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
 - 인계 대상: S8에 실행 예제 목록, 공식 import/지원 구성, 업그레이드·롤백 테스트와 남은 제한을 전달한다.
 - 검증 기록: 대상 commit/artifact, 환경, 명령, pass/fail/skip, 증거와 남은 제한을 실행 후 기록한다.

@@ -1,6 +1,5 @@
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { DatabaseError } from 'pg';
 import type { Pool, PoolConfig } from 'pg';
 
 import type {
@@ -10,6 +9,7 @@ import type {
   MutateResult,
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
+import { isMissingPeer } from '../utils/optional-peer';
 
 /**
  * Constructor options for {@link PostgresStorage}.
@@ -53,7 +53,44 @@ const PG_INVALID_TEXT_REPRESENTATION = '22P02';
  * unrelated runtime exception. See spec §4.3 / §4.4.
  */
 function isInvalidTextRepresentation(err: unknown): boolean {
-  return err instanceof DatabaseError && err.code === PG_INVALID_TEXT_REPRESENTATION;
+  if (
+    typeof err !== 'object' ||
+    err === null ||
+    !('code' in err) ||
+    err.code !== PG_INVALID_TEXT_REPRESENTATION
+  ) {
+    return false;
+  }
+  try {
+    // Keep the DatabaseError identity check without loading pg on import or
+    // for injected pools whose queries succeed (or throw unrelated errors).
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { DatabaseError } = require('pg') as typeof import('pg');
+    return err instanceof DatabaseError;
+  } catch (loadError) {
+    // An injected pool can be used without pg. Preserve its original error
+    // if the driver is unavailable instead of turning it into a stale result.
+    if (isMissingPeer(loadError, 'pg')) return false;
+    throw loadError;
+  }
+}
+
+function createPool(connection: PoolConfig): Pool {
+  let pg: typeof import('pg');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    pg = require('pg') as typeof import('pg');
+  } catch (error) {
+    if (isMissingPeer(error, 'pg')) {
+      throw new Error(
+        'PostgresStorage: optional peer `pg` is required when using `connection`. ' +
+          'Install it with `npm install pg` (TypeScript: `npm install -D @types/pg`).',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return new pg.Pool(connection);
 }
 
 /**
@@ -83,15 +120,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
       this.pool = options.pool;
       this.ownsPool = false;
     } else if (options.connection) {
-      const factory =
-        options.poolFactory ??
-        ((connection: PoolConfig): Pool => {
-          // Lazy require so consumers without pg installed are unaffected
-          // unless they actually exercise this code path.
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const PgPool = require('pg').Pool as new (cfg: PoolConfig) => Pool;
-          return new PgPool(connection);
-        });
+      const factory = options.poolFactory ?? createPool;
       this.pool = factory(options.connection);
       this.ownsPool = true;
     } else {

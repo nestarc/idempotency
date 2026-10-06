@@ -5,12 +5,8 @@ import { Test } from '@nestjs/testing';
 import { Pool } from 'pg';
 import request from 'supertest';
 
-import {
-  IdempotencyInterceptor,
-  IdempotencyModule,
-  Idempotent,
-  PostgresStorage,
-} from '../../src';
+import { IdempotencyInterceptor, IdempotencyModule, Idempotent } from '../../src';
+import { PostgresStorage } from '../../src/postgres';
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;

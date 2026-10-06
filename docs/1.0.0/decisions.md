@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01을 결정해 S1에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01·D02를 결정해 S1·S2에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -15,7 +15,7 @@
 | ID | 상태 | 담당 작업 | 결정할 계약 | 반드시 검토할 영향 |
 | --- | --- | --- | --- | --- |
 | D01 | DECIDED | S1 | 최외곽 idempotency에서 최종 plain JSON 저장, 마지막 정상 emission, 버전 표식, 미지원 lease 유지/사전 거부 | 자세한 계약과 전환 조건은 아래 D01 및 S1 문서 |
-| D02 | OPEN | S2 | optional peer의 런타임·타입 경계와 공식 export 경로 | 기존 root import 유지 여부, subpath 필요성, pg 타입 배포, CJS 소비자 호환성 |
+| D02 | DECIDED | S2 | Memory/common root, Redis·PG 공식 subpath 분리; PG 타입은 소비자가 설치 | 0.4 root DB import를 /redis·/postgres로 이동; TS5.7.3 CJS node/node16/nodenext |
 | D03 | OPEN | S3 | 인증된 identity와 endpoint 조합, 모호하지 않은 key 형식, header/resolver 입력 계약 | global/custom scope 의미, query 제외, 중복·빈 헤더, 문자열 길이, legacy record와 혼합 버전 |
 | D04 | OPEN | S4 | event namespace·keyHash·오류 정보·로그 마스킹 계약 | raw key/인증 정보/동적 경로의 노출, 기존 event 소비자, metric cardinality, callback 실패 |
 | D05 | OPEN | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
@@ -62,3 +62,17 @@
 - 대안: 인터셉터 안에서 class-transformer를 다시 호출하면 type/Transform 중복 및 다른 변환 누락이 생긴다. 바이너리 전체 저장이나 adapter patch는 S1보다 넓다. bypass/delete는 이미 성공한 작업의 즉시 재실행을 허용한다. legacy 호환 replay는 제외된 필드가 다시 나타날 수 있다.
 - 검증: S1 문서의 실행 결과를 단일 근거로 갱신한다. 지원 Nest/Node 전체 버전 매트릭스와 실제 DB 검증은 S8에서 추가한다.
 - 후속: S4 신규 bypass/conflict 관측 경로, S5 완료 뒤 capture 경계, S6 opaque body 계약, S7 배포·복구 절차, S8 adapter/serializer/devDependency 매트릭스.
+
+## D02 — 선택 의존성과 공개 import 경계 (DECIDED)
+
+- 날짜/결정자: 2026-10-06, Codex. 사용자 S2 구현 요청 범위에서 결정.
+- 기준: 조사 `9610774`, 구현 전 재현 tarball은 S1 완료 commit `c5dff136404a135396957258204af8466744f971`에서 생성했다.
+- 계약: 루트에는 MemoryStorage·module/interceptor/decorator·공통 token/타입만 공개한다. RedisStorage/RedisStorageOptions는 `@nestarc/idempotency/redis`, PostgresStorage/PostgresStorageOptions/PostgresSweepService/SweepOptions는 `@nestarc/idempotency/postgres`에서 공개한다. `sql/init.sql`, `package.json`도 공식 subpath다. 내부 `dist/*`와 storage barrel은 공식 API가 아니다.
+- 타입: key/fingerprint resolver·입력과 observability options/event/outcome을 루트에서 export한다. Memory 소비자는 pg/ioredis/@types/pg가 필요 없다. Redis 소비자는 ioredis만, PG TypeScript 소비자는 pg와 개발 의존성 @types/pg를 명시적으로 설치한다. @types/pg는 optional peer로 표시한다. 공개 adapter 옵션은 원래 드라이버의 Pool/PoolConfig, Redis/RedisOptions 타입을 유지한다.
+- 런타임: 모듈 import만으로 선택 드라이버를 require하지 않는다. 내부 연결 생성 시 드라이버 누락을 설치 명령이 포함된 오류로 보고한다. PostgreSQL 오류 분류는 실제 DatabaseError의 22P02만 stale로 다루는 기존 계약을 유지하고 해당 오류 경로에서 pg를 지연 조회한다. 의존성 내부 손상은 드라이버 누락 메시지로 덮지 않는다.
+- 컴파일 범위: TypeScript 최소 5.7.3, strict/skipLibCheck:false, CJS 소비자의 node/CommonJS, node16/Node16, nodenext/NodeNext를 검사한다. exports의 types와 legacy node용 typesVersions를 함께 제공한다. ESM 배포, bundler resolution, 이외 TypeScript 버전 전체 지원을 검증했다고 주장하지 않는다. Node/Nest 전체 matrix는 D08에서 확정한다.
+- 컴파일 하한 근거: 초기 TS5.4.5 검사에서 pg-protocol1.16.1의 generic Buffer 선언과 @types/node20.19.39의 TS<=5.6 경로가 충돌해 TS2315가 발생했다. 같은 격리 PG 소비자가 TS5.7.3에서 통과했다. 전이 의존성 override로 현재 소비자 문제를 숨기지 않고 대표 드라이버 버전과 함께 검증 가능한 하한5.7.3을 채택했다. 이전5.4.5 실패 로그도 보존한다.
+- 대안: root DB export 유지+lazy require만으로는 선언 파일의 pg/ioredis 참조가 남는다. 모든 DB 타입을 필수 dependency로 제공하면 Memory 최소 설치 계약과 충돌한다. 자체 구조적 client 타입으로 바꾸면 Pool/Redis 호환·기능 범위를 새로 관리해야 한다. subpath 분리는 기존 adapter 타입을 그대로 유지하면서 선택 의존성 경계를 명확하게 하므로 채택했다.
+- 호환성: 0.4의 root DB import 및 내부 경로 사용자는 새 subpath로 소스를 변경해야 한다. Memory·공통 API의 root 경로는 유지한다. 키/schema/저장 형식/어댑터 처리 정책은 S2에서 변경하지 않는다. S1 데이터 전환 규칙은 별도로 적용한다. root DB 재export shim은 타입 의존성 누출을 다시 만들므로 제공하지 않는다.
+- 검증: 실제 tarball의 격리 Memory/Redis/PG fixture, PG 타입 미설치 음성 검사, 선택 driver 누락 검사, 공개 타입 컴파일, Nest 생성/init/close, 실제 DB create/get/complete/delete 및 포장 파일 검사를 S2 기록에 남긴다. adapter 동작 계약은 변경하지 않았으므로 공통 storage 계약은 유지하고 기존 전체 suite로 검증한다.
+- 후속: S7은 import/설치 전환과 예제를 이 결정에 맞추며 sweep DI 문제를 별도로 마무리한다. S8은 같은 fixture와 검증한 tarball·checksum을 재사용하고 최종 matrix 및 artifact 게시 연결을 구현한다.

@@ -27,6 +27,20 @@ npm run prepublishOnly   # clean + lint + test:all + build (the full CI chain)
 Every PR must pass the `prepublishOnly` chain before it merges; CI
 enforces this automatically.
 
+### Isolated package consumers
+
+For package exports, optional peers or public declarations, also run
+`npm run test:consumers` with test-only `TEST_DATABASE_URL` and `TEST_REDIS_URL`.
+This builds and installs an actual tarball outside the repository, runs strict
+TypeScript checks, and boots Nest against Memory/Redis/Postgres. Use
+`npm run test:consumers -- --tarball /absolute/path/package.tgz` to reuse a
+specific artifact. The runner preserves generated lockfiles, installed trees,
+logs and a checksum. See [consumer fixtures](test/consumers/README.md).
+
+`--skip-services` is available for partial local checks and records explicit
+skips; it is insufficient for S2/S8 completion. CI/release integration of this
+runner and the final supported version matrix are tracked in S8.
+
 ## Changing the `IdempotencyStorage` contract
 
 If your PR modifies `src/interfaces/idempotency-storage.interface.ts`,

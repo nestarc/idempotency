@@ -19,7 +19,7 @@ module.exports = {
     jest: true,
     es2022: true,
   },
-  ignorePatterns: ['dist/', 'coverage/', 'node_modules/', '*.cjs'],
+  ignorePatterns: ['dist/', 'coverage/', 'node_modules/', 'test/consumers/', '*.cjs'],
   rules: {
     '@typescript-eslint/no-explicit-any': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',

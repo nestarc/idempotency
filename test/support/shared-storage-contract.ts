@@ -128,20 +128,25 @@ export const describeStorageContract = (
       });
     });
 
-    it('complete() with a wrong token returns "stale" and does not mutate', async () => {
-      await storage.create('contract-4', 'fp', 60);
-      const result = await storage.complete(
-        'contract-4',
-        'wrong-token',
-        { statusCode: 200, body: '{}' },
-        60,
-      );
-      expect(result).toBe('stale');
+    // Both malformed and well-formed nonmatching tokens must retain the same
+    // CAS behavior when an adapter loads its driver's error class lazily.
+    it.each(['wrong-token', '00000000-0000-4000-8000-000000000000'])(
+      'complete() with nonmatching token %s returns "stale" and does not mutate',
+      async (wrongToken) => {
+        await storage.create('contract-4', 'fp', 60);
+        const result = await storage.complete(
+          'contract-4',
+          wrongToken,
+          { statusCode: 200, body: '{}' },
+          60,
+        );
+        expect(result).toBe('stale');
 
-      const record = await storage.get('contract-4');
-      expect(record!.status).toBe('PROCESSING');
-      expect(record!.responseBody).toBeUndefined();
-    });
+        const record = await storage.get('contract-4');
+        expect(record!.status).toBe('PROCESSING');
+        expect(record!.responseBody).toBeUndefined();
+      },
+    );
 
     // This is the LSP-level invariant that caught adapter drift.
     it('complete() preserves createdAt (invariant field)', async () => {
@@ -185,12 +190,15 @@ export const describeStorageContract = (
       await expect(storage.get('contract-7')).resolves.toBeNull();
     });
 
-    it('delete() with a wrong token returns "stale" and leaves the record intact', async () => {
-      await storage.create('contract-8', 'fp', 60);
-      const result = await storage.delete('contract-8', 'wrong-token');
-      expect(result).toBe('stale');
-      await expect(storage.get('contract-8')).resolves.not.toBeNull();
-    });
+    it.each(['wrong-token', '00000000-0000-4000-8000-000000000000'])(
+      'delete() with nonmatching token %s returns "stale" and leaves the record intact',
+      async (wrongToken) => {
+        await storage.create('contract-8', 'fp', 60);
+        const result = await storage.delete('contract-8', wrongToken);
+        expect(result).toBe('stale');
+        await expect(storage.get('contract-8')).resolves.not.toBeNull();
+      },
+    );
 
     it('delete() on a missing key returns "ok" (idempotent cleanup)', async () => {
       const result = await storage.delete('contract-missing', 'any-token');
