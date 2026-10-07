@@ -344,13 +344,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
           // Never expose an intermediate emission as a completed operation.
           takeLast(1),
           defaultIfEmpty(undefined),
-          concatMap((value) =>
-            this.captureResponse(scopedKey, token, value, res, opts),
-          ),
           catchError((err) =>
-            // Handler failure ONLY — captureResponse is total and never
-            // throws storage errors up to this point. Safe to delete the
-            // record and re-throw the handler's exception.
+            // Only source failures reach cleanup. A handler error does not
+            // prove that business effects rolled back; consumers must enforce
+            // their own durable command deduplication before retrying.
             this.observeStorage(opts, scopedKey, 'delete', () => this.storage.delete(scopedKey.key, token)).pipe(
               // Even the delete is best-effort. If cleanup fails we still
               // propagate the original handler error; the record will TTL out.
@@ -360,6 +357,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
               }),
               switchMap(() => throwError(() => err)),
             ),
+          ),
+          // Keep post-success work outside the handler-error boundary. Neither
+          // a capture failure nor a lost completion acknowledgement may unlock
+          // an operation which already succeeded.
+          concatMap((value) =>
+            this.captureResponse(scopedKey, token, value, res, opts),
           ),
         );
       }),
@@ -376,14 +379,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * - Storage complete() THROWS (transient failure) → emit anyway + error log,
    *   **do not delete the record**. The handler succeeded; a transient write
    *   failure must not turn a successful business operation into a retryable
-   *   failure for the client. The PROCESSING record stays in place until
-   *   TTL reclaims it; retries in that window correctly hit 409.
+   *   failure for the client. The record may be PROCESSING or already COMPLETED
+   *   if the write applied but its acknowledgement was lost.
    * - Otherwise → persist and emit the original value
    *
-   * CRITICAL: this method is *total* — it never lets an exception escape.
-   * The caller's `catchError` in {@link acquireAndRun} is strictly for
-   * HANDLER errors; mixing in storage errors here would delete the record
-   * and cause duplicate execution on retry (pre-v0.1.3 regression).
+   * Capture and storage failures preserve the successful value. Cleanup is
+   * structurally upstream, so post-success exceptions cannot unlock the record.
    */
   private captureResponse(
     scopedKey: ScopedRequestKey,
@@ -394,31 +395,44 @@ export class IdempotencyInterceptor implements NestInterceptor {
   ): Observable<unknown> {
     // Passthrough is supported only for status/headers plus a returned value.
     // A handler that already sent its response cannot be captured accurately.
-    const alreadySent = res.headersSent || res.sent || res.raw?.headersSent;
+    let alreadySent = false;
+    let statusCode: number | undefined;
     let serialized: string;
+    let headers: Record<string, string> | undefined;
     try {
+      alreadySent = Boolean(res.headersSent || res.sent || res.raw?.headersSent);
+      statusCode = res.statusCode ?? 200;
       if (alreadySent) throw new Error('HTTP response was already sent');
       serialized = encodeReplayBody(value);
+      headers = captureReplayHeaders(res, opts.replayHeaders);
     } catch {
       logDiagnostic(this.logger, 'response_not_replayable', this.eventContext(scopedKey));
       if (!alreadySent) this.setIdempotencyStatus(res, opts, 'bypassed');
       this.emitEvent(opts, 'bypassed', scopedKey, {
-        statusCode: res.statusCode ?? 200,
+        statusCode,
         error: { code: 'response_not_replayable' },
       });
       return of(value);
     }
 
-    const statusCode = res.statusCode ?? 200;
-    const headers = captureReplayHeaders(res, opts.replayHeaders);
     return defer(() =>
       this.storage.complete(
         scopedKey.key,
         token,
-        { statusCode, body: serialized, headers },
+        { statusCode: statusCode!, body: serialized, headers },
         opts.ttl,
       ),
     ).pipe(
+      // Catch only the storage operation, not response/event processing.
+      catchError(() => {
+        logDiagnostic(this.logger, 'complete_failure', this.eventContext(scopedKey));
+        this.setIdempotencyStatus(res, opts, 'complete_error');
+        this.emitEvent(opts, 'complete_error', scopedKey, {
+          statusCode,
+          error: { code: 'storage_failure', operation: 'complete' },
+        });
+        return of('failed' as const);
+      }),
       map((result) => {
         if (result === 'stale') {
           // Our record was evicted and replaced while the handler ran.
@@ -429,27 +443,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
           this.emitEvent(opts, 'stale', scopedKey, {
             statusCode,
           });
-        } else {
+        } else if (result === 'ok') {
           this.setIdempotencyStatus(res, opts, 'created');
           this.emitEvent(opts, 'created', scopedKey, {
             statusCode,
           });
         }
         return value;
-      }),
-      // CRITICAL: swallow storage.complete() exceptions. The handler already
-      // succeeded; a transient cache-write failure must not cause duplicate
-      // execution on retry. The PROCESSING record stays and retries see 409
-      // until TTL reclaims it — the lesser evil vs. re-running a successful
-      // business operation.
-      catchError(() => {
-        logDiagnostic(this.logger, 'complete_failure', this.eventContext(scopedKey));
-        this.setIdempotencyStatus(res, opts, 'complete_error');
-        this.emitEvent(opts, 'complete_error', scopedKey, {
-          statusCode,
-          error: { code: 'storage_failure', operation: 'complete' },
-        });
-        return of(value);
       }),
     );
   }
@@ -761,9 +761,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
   }
 
   private setHeader(res: ResponseShape, name: string, value: string): void {
-    const setHeader = res.setHeader ?? res.header;
-    if (setHeader) {
-      setHeader.call(res, name, value);
+    try {
+      const setHeader = res.setHeader ?? res.header;
+      if (setHeader) {
+        void Promise.resolve(setHeader.call(res, name, value)).catch(() => undefined);
+      }
+    } catch {
+      // Diagnostic headers are best effort, including after disconnect/send.
+      // Their failure must not alter a business result or storage classification.
     }
   }
 }

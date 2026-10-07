@@ -39,13 +39,12 @@ export interface CreateResult {
  * Return shape of {@link IdempotencyStorage.complete} and
  * {@link IdempotencyStorage.delete}.
  *
- * - `'ok'`: the operation succeeded — the caller's token matched the stored
- *   record (or, for delete, the record was already absent).
- * - `'stale'`: the caller's token does NOT match the record currently stored
- *   under this key. This happens when the original PROCESSING record was
- *   evicted by TTL and a newer caller has since created a fresh record. The
- *   original caller MUST NOT touch the newer record; storage silently refused
- *   the write.
+ * - `'ok'`: a live PROCESSING record completed, or delete removed the owned
+ *   record / found it logically absent (including expiry).
+ * - `'stale'`: complete found a missing, expired, already COMPLETED, or
+ *   differently owned record; or delete found a live record with another
+ *   token. No response, TTL, token or createdAt is changed on this path.
+ *   Expiry alone is sufficient: a replacement does not need to exist.
  */
 export type MutateResult = 'ok' | 'stale';
 
@@ -63,13 +62,19 @@ export type MutateResult = 'ok' | 'stale';
  * 3. `createdAt` immutability — `complete()` and any other mutation MUST
  *    preserve the `createdAt` field of the original PROCESSING record.
  *    See {@link IdempotencyRecord.createdAt}.
+ * 4. Logical expiry — a lease is absent at its storage deadline even when
+ *    physical timer/sweep cleanup has not run. All operations share the same
+ *    deadline; an expired owner cannot revive the lease with complete().
+ * 5. Complete once — only a live PROCESSING record may become COMPLETED.
+ *    Repeated/concurrent complete with the same token returns stale after
+ *    the first success, preserving its response and retention deadline.
  *
  * ### Lifecycle
  *
  * Storage adapters that hold external resources (Redis clients, DB
  * connections, timers) SHOULD implement Nest's `OnModuleDestroy` hook so
  * the resources are released when the host application shuts down. Both
- * built-in adapters (`MemoryStorage`, `RedisStorage`) do this — a custom
+ * built-in adapters (`MemoryStorage`, `RedisStorage`, `PostgresStorage`) do this — a custom
  * adapter is free to opt in the same way.
  *
  * A cross-adapter contract suite that exercises every requirement of this
@@ -85,24 +90,21 @@ export interface IdempotencyStorage {
   /**
    * Atomically creates a PROCESSING record. On success, returns an opaque
    * token that the caller MUST pass back to `complete()` / `delete()`.
+   * An expired record is absent for NX purposes, regardless of physical cleanup.
    *
    * @param key the idempotency key from the client header (already scoped
    *            by the interceptor to include endpoint identity)
    * @param fingerprint SHA-256 of the request body, or undefined if fingerprinting is off
    * @param ttlSeconds lifetime of the lock; the interceptor passes the resolved TTL
    */
-  create(
-    key: string,
-    fingerprint: string | undefined,
-    ttlSeconds: number,
-  ): Promise<CreateResult>;
+  create(key: string, fingerprint: string | undefined, ttlSeconds: number): Promise<CreateResult>;
 
   /**
    * Transitions a `PROCESSING` record to `COMPLETED` and stores the captured response,
-   * but ONLY if the stored record's token matches the caller's token.
-   * Returns `'stale'` if the token does not match — meaning the original record
-   * was evicted and a newer one exists under this key. The caller's response
-   * must not overwrite the newer record.
+   * but ONLY if the record is unexpired and its token matches the caller's.
+   * Returns `'stale'` for missing/expired records, token mismatches, and an
+   * already COMPLETED record (including the same token). A stale operation
+   * must not overwrite a response or refresh TTL.
    *
    * On `'ok'`, implementations must refresh the TTL to `ttlSeconds`.
    */
@@ -115,9 +117,10 @@ export interface IdempotencyStorage {
 
   /**
    * Removes a record, but ONLY if the caller's token matches. Returns `'ok'`
-   * if the record was removed OR was already absent (idempotent cleanup), and
+   * if the record was removed OR was absent/expired (idempotent cleanup), and
    * `'stale'` only if a DIFFERENT record (with a different token) is currently
-   * stored under this key.
+   * stored and unexpired under this key. Expired physical rows may remain for
+   * later cleanup; delete success does not promise immediate physical removal.
    */
   delete(key: string, token: string): Promise<MutateResult>;
 }

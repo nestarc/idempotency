@@ -66,17 +66,13 @@ function createClient(connection: RedisOptions): Redis {
 // ioredis's custom command typing is looser than the declared Redis class.
 // We widen the client type locally so the injected Lua commands are callable.
 type RedisWithIdem = Redis & {
-  idemCreate(
-    key: string,
-    token: string,
-    payload: string,
-    ttl: string,
-  ): Promise<number>;
+  idemCreate(key: string, token: string, payload: string, ttl: string): Promise<number>;
   idemComplete(
     key: string,
     token: string,
     payload: string,
     ttl: string,
+    expectedPayload: string,
   ): Promise<string>;
   idemDelete(key: string, token: string): Promise<string>;
 };
@@ -109,9 +105,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
       baseClient = factory(options.connection);
       this.ownsClient = true;
     } else {
-      throw new Error(
-        'RedisStorage: must supply either `client` or `connection` options',
-      );
+      throw new Error('RedisStorage: must supply either `client` or `connection` options');
     }
 
     RedisStorage.registerCommands(baseClient);
@@ -175,6 +169,9 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
       return 'stale';
     }
     const existing = JSON.parse(hash.payload) as SerializedPayload;
+    if (existing.status !== 'PROCESSING') {
+      return 'stale';
+    }
     const now = new Date();
     const updated: SerializedPayload = {
       ...existing,
@@ -190,6 +187,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
       token,
       JSON.stringify(updated),
       String(ttlSeconds),
+      hash.payload,
     );
     return result === 'ok' ? 'ok' : 'stale';
   }
@@ -252,6 +250,11 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
         local token = redis.call('HGET', KEYS[1], 'token')
         if not token then return 'stale' end
         if token ~= ARGV[1] then return 'stale' end
+        -- Compare the PROCESSING snapshot as well as the owner token: two
+        -- simultaneous complete calls can read the same token before either
+        -- writes, but only one may replace that payload and refresh the TTL.
+        local payload = redis.call('HGET', KEYS[1], 'payload')
+        if payload ~= ARGV[4] then return 'stale' end
         redis.call('HSET', KEYS[1], 'payload', ARGV[2])
         redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
         return 'ok'

@@ -1,0 +1,537 @@
+{
+  "fixture": "failure-lifecycle.real.spec.ts",
+  "capturedAt": "2026-10-07T11:22:18.161Z",
+  "boundaries": {
+    "crash": "Real child-process SIGKILL ordered by IPC barriers",
+    "client": "Interceptor status/body boundary; no TCP HTTP server",
+    "ledger": "Separate PostgreSQL transaction for both storage adapters",
+    "expiry": "Test-only shortening of server expiry after the pre-expiry retry; PROCESSING lease is 120 seconds and COMPLETED retention is 300 seconds",
+    "completeFailure": "Application-boundary rejection before invoking adapter or after its successful reply; not a network-outage simulation"
+  },
+  "scenarios": [
+    {
+      "backend": "redis",
+      "scenario": "before-business-commit",
+      "originalClient": "no response (SIGKILL)",
+      "exit": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "afterCrash": {
+        "record": {
+          "token": "29fe46c2-14fc-4ff1-a210-0d4822e43dd5",
+          "status": "PROCESSING",
+          "expiresAt": "2026-10-07T11:24:05.561Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 0
+      },
+      "beforeExpiry": {
+        "status": 409,
+        "idempotencyStatus": "conflict",
+        "events": [
+          "conflict"
+        ]
+      },
+      "expired": {
+        "record": null,
+        "handlerExecutions": 1,
+        "committedEffects": 0
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "2cb45c5f-7986-44a6-9e62-0b24802ff41b"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "f1fce38c-7e2d-4d4c-936f-834d6276dbd4",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:06.425Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 1
+      }
+    },
+    {
+      "backend": "redis",
+      "scenario": "after-business-commit",
+      "originalClient": "no response (SIGKILL)",
+      "exit": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "afterCrash": {
+        "record": {
+          "token": "b01e50ce-a2d6-4f4a-bbd7-b131ba2a85d4",
+          "status": "PROCESSING",
+          "expiresAt": "2026-10-07T11:24:06.799Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 409,
+        "idempotencyStatus": "conflict",
+        "events": [
+          "conflict"
+        ]
+      },
+      "expired": {
+        "record": null,
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "ce95a119-fc39-48f6-8ce8-5a44ad21a928"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "4069e266-365e-44d2-b4fb-0ba16970f27e",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:07.679Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "redis",
+      "scenario": "after-complete",
+      "originalClient": "no response (SIGKILL)",
+      "exit": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "afterCrash": {
+        "record": {
+          "token": "766232b6-54a6-49ac-8bdb-c343272ed052",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:08.062Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "be009a04-1da8-4d73-aaa0-793958d85a01"
+        },
+        "idempotencyStatus": "replayed",
+        "events": [
+          "replayed"
+        ]
+      },
+      "expired": {
+        "record": null,
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "be009a04-1da8-4d73-aaa0-793958d85a01"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "2193da47-d1ac-4eb0-b6a4-7f9bb5ce0774",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:08.913Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "redis",
+      "scenario": "before-write-rejection",
+      "injection": "application boundary; no network outage",
+      "originalClient": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "cd2790c9-fd26-484b-b530-d409e150372e"
+        },
+        "idempotencyStatus": "complete_error",
+        "events": [
+          "complete_error"
+        ]
+      },
+      "afterOriginal": {
+        "record": {
+          "token": "d03bb8cb-ff82-42fd-8aea-e09261667269",
+          "status": "PROCESSING",
+          "expiresAt": "2026-10-07T11:24:09.284Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 409,
+        "idempotencyStatus": "conflict",
+        "events": [
+          "conflict"
+        ]
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "cd2790c9-fd26-484b-b530-d409e150372e"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "14b1adb7-25fb-4203-80b0-01347911f04d",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:10.145Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "redis",
+      "scenario": "applied-write-rejection",
+      "injection": "application boundary; no network outage",
+      "originalClient": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "6ed81214-21cd-495b-b69a-d613564a9488"
+        },
+        "idempotencyStatus": "complete_error",
+        "events": [
+          "complete_error"
+        ]
+      },
+      "afterOriginal": {
+        "record": {
+          "token": "23816652-c275-4eaa-b2ba-7b6333920b2f",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:10.601Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "6ed81214-21cd-495b-b69a-d613564a9488"
+        },
+        "idempotencyStatus": "replayed",
+        "events": [
+          "replayed"
+        ]
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "6ed81214-21cd-495b-b69a-d613564a9488"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "25ec0da4-e8f9-4b8e-ac4e-277b07b15a57",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:11.522Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "postgres",
+      "scenario": "before-business-commit",
+      "originalClient": "no response (SIGKILL)",
+      "exit": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "afterCrash": {
+        "record": {
+          "token": "a2df5ddf-2334-4d98-a801-aedbc106efd5",
+          "status": "PROCESSING",
+          "expiresAt": "2026-10-07T11:24:11.912Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 0
+      },
+      "beforeExpiry": {
+        "status": 409,
+        "idempotencyStatus": "conflict",
+        "events": [
+          "conflict"
+        ]
+      },
+      "expired": {
+        "record": null,
+        "handlerExecutions": 1,
+        "committedEffects": 0
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "c5bf7af0-04d0-4bcd-b191-6f3f28dc8857"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "d2c6ec25-b64f-404e-b06b-710713cddcf9",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:12.783Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 1
+      }
+    },
+    {
+      "backend": "postgres",
+      "scenario": "after-business-commit",
+      "originalClient": "no response (SIGKILL)",
+      "exit": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "afterCrash": {
+        "record": {
+          "token": "9784c01a-ebb6-4119-a29e-298034366cde",
+          "status": "PROCESSING",
+          "expiresAt": "2026-10-07T11:24:13.217Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 409,
+        "idempotencyStatus": "conflict",
+        "events": [
+          "conflict"
+        ]
+      },
+      "expired": {
+        "record": null,
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "3e5871ca-5973-4e45-b527-40f99cabe500"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "e286dce5-3ab8-42f7-8bd6-2406ac15cbe2",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:14.126Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "postgres",
+      "scenario": "after-complete",
+      "originalClient": "no response (SIGKILL)",
+      "exit": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "afterCrash": {
+        "record": {
+          "token": "1a3d9834-1d72-4d17-917b-a28b99b9b9ba",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:14.520Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "6dde259a-cdee-4f04-ab2e-cf0a3f841e2e"
+        },
+        "idempotencyStatus": "replayed",
+        "events": [
+          "replayed"
+        ]
+      },
+      "expired": {
+        "record": null,
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "6dde259a-cdee-4f04-ab2e-cf0a3f841e2e"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "486e8f5a-20b2-4125-ba43-1c1135e1a9e4",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:15.495Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "postgres",
+      "scenario": "before-write-rejection",
+      "injection": "application boundary; no network outage",
+      "originalClient": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "301ec58b-7009-44b0-b68c-520eae277c08"
+        },
+        "idempotencyStatus": "complete_error",
+        "events": [
+          "complete_error"
+        ]
+      },
+      "afterOriginal": {
+        "record": {
+          "token": "702245ab-b275-4cf3-8752-38bf8f638fdd",
+          "status": "PROCESSING",
+          "expiresAt": "2026-10-07T11:24:16.038Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 409,
+        "idempotencyStatus": "conflict",
+        "events": [
+          "conflict"
+        ]
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "301ec58b-7009-44b0-b68c-520eae277c08"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "d3b94f81-b868-4661-8470-a58395653dcf",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:16.922Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    },
+    {
+      "backend": "postgres",
+      "scenario": "applied-write-rejection",
+      "injection": "application boundary; no network outage",
+      "originalClient": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "b4f8e95d-87f3-4d19-b7af-2c6a2b0409dc"
+        },
+        "idempotencyStatus": "complete_error",
+        "events": [
+          "complete_error"
+        ]
+      },
+      "afterOriginal": {
+        "record": {
+          "token": "998c5ad0-d580-4f8d-a131-f42032242928",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:17.295Z"
+        },
+        "handlerExecutions": 1,
+        "committedEffects": 1
+      },
+      "beforeExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "b4f8e95d-87f3-4d19-b7af-2c6a2b0409dc"
+        },
+        "idempotencyStatus": "replayed",
+        "events": [
+          "replayed"
+        ]
+      },
+      "afterExpiry": {
+        "status": 201,
+        "body": {
+          "charged": true,
+          "operationId": "b4f8e95d-87f3-4d19-b7af-2c6a2b0409dc"
+        },
+        "idempotencyStatus": "created",
+        "events": [
+          "created"
+        ]
+      },
+      "finalState": {
+        "record": {
+          "token": "20fcf0da-93d0-4fd0-9601-1f484312381f",
+          "status": "COMPLETED",
+          "expiresAt": "2026-10-07T11:27:18.150Z"
+        },
+        "handlerExecutions": 2,
+        "committedEffects": 2
+      }
+    }
+  ]
+}

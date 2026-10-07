@@ -63,6 +63,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "jest --selectProjects unit",
+    "test:failure:real": "S5_REQUIRE_REAL_STORAGE=1 jest --selectProjects unit --runInBand test/regression/failure-lifecycle.real.spec.ts",
     "test:redis": "jest --selectProjects unit --runInBand test/storage/redis.storage.real.spec.ts",
     "test:watch": "jest --selectProjects unit --watch",
     "test:cov": "jest --selectProjects unit --coverage",

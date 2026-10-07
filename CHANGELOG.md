@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Isolate handler errors from response-capture and completion failures. Both
+  synchronous storage throws and Promise rejections preserve the same outcome;
+  completion failure never deletes a successful operation's record, and failed
+  cleanup preserves the original handler error.
+- Apply expiration and PROCESSING ownership checks before completion. Expired,
+  replaced or already completed records return `stale` without changing their
+  response, TTL or creation time; an old token cannot mutate a new owner.
+
 - Preserve endpoint isolation when a custom scope returns only a tenant identity.
   Encode component boundaries before hashing to prevent `::` key/path collisions.
 - Reject invalid or repeated header keys and non-string resolver results before
@@ -28,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storage access. Detect passthrough handlers that already sent the response.
 
 ### Changed
+
+- Document handler-error token deletion, outer cancellation and crash recovery
+  in the [failure lifecycle guide](docs/failure-recovery.md). Cancellation does
+  not detach business execution for later recording; already-started storage
+  Promises may still commit without a delivered outcome. Ambiguous writes and
+  lease expiry require application-owned business reconciliation.
+- Custom storage adapters must treat `expiresAt <= now` as absent and reject
+  repeated completion without refreshing the TTL. No new state, method or
+  response schema is introduced. Broader TTL-range validation remains in S6.
 
 - **Breaking key/scope transition for 1.0:** function scopes add a string or
   readonly array of identity components to the endpoint. Every scope mode uses

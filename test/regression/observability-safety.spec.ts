@@ -154,8 +154,8 @@ describe('REGRESSION: observability payload and failure isolation', () => {
       token: 'existing-token',
       fingerprint,
       status: 'PROCESSING',
-      createdAt: new Date('2026-10-07T00:00:00.000Z'),
-      expiresAt: new Date('2026-10-07T00:01:00.000Z'),
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
       ...overrides,
     };
     storage.seed(record);

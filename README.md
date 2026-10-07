@@ -104,13 +104,16 @@ export class PaymentsController {
   @Post()
   @Idempotent()
   createPayment(@Body() dto: CreatePaymentDto) {
-    // Your business logic. Runs at most once per Idempotency-Key.
+    // Protect business side effects with a durable command ID as well.
     return this.paymentService.process(dto);
   }
 }
 ```
 
-That's it. A duplicate `POST /payments` with the same `Idempotency-Key` header will replay the cached response without re-running your handler.
+A duplicate `POST /payments` with the same `Idempotency-Key` header and matching
+body replays a retained, supported completed response without re-running your
+handler. A processing lease returns 409. Failures, cancellation and expiry need
+the [failure and recovery contract](docs/failure-recovery.md).
 
 ### Three ways to wire the interceptor
 
@@ -191,8 +194,10 @@ detectable from a plain object.
 An unsupported response is still subject to Nest/adapter handling: passing it
 through cannot make an invalid HTTP body valid. A retained lease only protects
 until `processingTtl` expires; retrying after expiry can execute the operation
-again. A source error discards intermediate values and uses the existing error
-cleanup. Subscription cancellation does not complete or delete the record.
+again. A source error discards intermediate values and uses token-based error
+cleanup, even if business effects already committed. Subscription cancellation
+does not start completion or deletion for a later handler result; an already
+started storage Promise may still commit. See [failure recovery](docs/failure-recovery.md).
 
 ### Upgrading stored keys and responses (S1/S3, unreleased)
 
@@ -452,19 +457,40 @@ must be a positive safe integer. Invalid configuration is a server error (500).
 
 By default, `PROCESSING` records and completed replay records use the same
 `ttl`. For long replay windows, you can use a shorter `processingTtl` so stuck
-in-flight records expire sooner after a crash:
+in-flight records expire sooner after a crash. Expiry permits a new acquisition;
+it does not establish that the previous business operation failed:
 
 ```ts
 IdempotencyModule.forRoot({
   storage: new RedisStorage({ client: redis }),
   ttl: 86400,        // replay completed responses for 24 hours
-  processingTtl: 60, // release stuck in-flight records after 60 seconds
+  processingTtl: 60, // lease expires after 60 seconds; reconcile uncertain work
 });
 ```
 
-Choose `processingTtl` above the endpoint's real p99 processing time. Too-short
-processing leases can allow a retry to acquire the key while the original
-request is still running.
+Choose `processingTtl` to cover the intended execution window, including slow
+dependencies and pauses. Even a lease above p99 can expire while work continues.
+A retry can then acquire the key and overlap the original operation. There is
+no automatic heartbeat; use durable business deduplication and the
+[reconciliation procedure](docs/failure-recovery.md#reconcile-a-payment-command).
+
+### Errors, timeouts and recovery
+
+Handler errors retain the existing best-effort token-delete policy. This also
+applies to a timeout inside the handler Observable; an exception after a business
+commit can therefore permit another execution. A successful handler whose
+response cannot be captured retains its PROCESSING lease. A failed `complete`
+call preserves the successful value and never triggers handler-error cleanup.
+Storage may already be COMPLETED if its write applied before acknowledgment failed.
+
+An outer timeout or explicit unsubscribe tears down the source subscription and
+does not keep a detached subscription to record later handler results. Business
+Promises can continue, and already-started `create`/`complete`/`delete` Promises
+can still commit without delivering events or a response. HTTP disconnects do
+not necessarily unsubscribe the application chain. See the
+[transition table and timeout placement guide](docs/failure-recovery.md) before
+enabling automatic retries. A missing record or expired lease is not evidence
+that retrying a business operation is safe.
 
 ### Custom key and fingerprint resolvers
 
@@ -554,8 +580,10 @@ application error path.
 Synchronous storage throws and Promise rejections follow the same observation
 and preservation rules. Successful cleanup and the handler error itself emit no
 additional event. A failed or ambiguous write may already have changed storage;
-an event is not proof of the final database state. Cancellation, crash recovery
-and final adapter failure contracts remain tracked in S5/S6.
+an event is not proof of the final database state. Pending writes that settle
+after unsubscribe do not deliver an outcome event through the canceled chain.
+See [failure recovery](docs/failure-recovery.md) for cancellation, crash and
+reconciliation rules; broader adapter validation remains tracked in S6.
 
 `onEvent` is best-effort and is not awaited. A synchronous throw or asynchronous
 rejection produces one fixed warning without another event, and cannot replace
@@ -637,17 +665,21 @@ Client Request (with Idempotency-Key header)
     └─ 6. Capture the final response after successful completion
           ├─ plain JSON             → storage.complete(token, statusCode, body, safe headers)
           │   ├─ 'ok'               → emit handler value
-          │   ├─ 'stale' (TTL race) → warn + emit (don't clobber newer record)
-          │   └─ throws (transient) → ERROR log + emit (don't delete — retries
-          │                            hit 409 until TTL reclaims the record,
-          │                            expiry can allow re-execution)
-          ├─ unsupported response  → bypass + warn + emit, keep PROCESSING
-          └─ handler threw          → delete record (best-effort) + rethrow
+          │   ├─ 'stale'           → warn + emit (don't change storage)
+          │   └─ throws/rejects    → ERROR log + emit (don't delete;
+          │                            failed acknowledgment may follow a write)
+          ├─ capture unavailable  → bypass + warn + emit, keep PROCESSING
+          └─ handler threw         → token delete (best-effort) + original error
 ```
 
 The interceptor waits for the ordinary HTTP source to complete and uses RxJS `concatMap` to await the storage write before emitting the final value. Intermediate emissions are never published as completed responses.
 
-Storage adapters implement **token-based compare-and-set**: each `create()` returns an opaque token that the interceptor passes back to `complete()` / `delete()`. A slow caller whose PROCESSING record was evicted by TTL and replaced by a newer request cannot clobber the newer record — the storage returns `'stale'` and the interceptor logs a warning while still emitting the handler's value to the original caller.
+Storage adapters implement **token-based compare-and-set**: each `create()`
+returns an opaque token passed to `complete()` / `delete()`. Completion requires
+an unexpired PROCESSING record with that token. Expired, missing, replaced or
+already completed records return `'stale'` without changing the response, TTL or
+creation time. The active original caller still receives its handler value.
+These checks protect storage ownership; they do not cancel business operations.
 
 ## Error reference
 
@@ -665,7 +697,7 @@ When a racing winner has already finished with a supported payload and matching 
 | Feature          | `MemoryStorage`        | `RedisStorage`         | `PostgresStorage`                        |
 | ---------------- | ---------------------- | ---------------------- | ---------------------------------------- |
 | Scope            | single process         | shared across replicas | shared across replicas                   |
-| Persistence      | none (lost on restart) | full Redis durability  | full Postgres durability                 |
+| Persistence      | none (lost on restart) | depends on Redis configuration | depends on Postgres configuration |
 | TTL mechanism    | `setTimeout`           | Redis `EXPIRE`         | lazy on `get()` + optional sweep service |
 | Cluster-safe     | ❌                     | ✅                     | ✅                                       |
 | Production-ready | ❌ (dev/test only)     | ✅                     | ✅                                       |
@@ -673,7 +705,12 @@ When a racing winner has already finished with a supported payload and matching 
 
 ### Custom storage adapters
 
-Implement the `IdempotencyStorage` interface. The contract is **token-based compare-and-set**: `create()` returns an opaque token, and `complete()` / `delete()` require the caller to pass the matching token back. This prevents a slow caller whose record was evicted by TTL from clobbering a newer caller's record.
+Implement the `IdempotencyStorage` interface. Treat a lease at or past its storage
+deadline as absent in every operation, regardless of physical cleanup. Memory/PG
+use `expiresAt <= now`; Redis uses server TTL, with client-clock `expiresAt` metadata. The contract is **token-based
+compare-and-set**: `create()` returns an opaque token, and mutations cannot
+change a live record belonging to another token. `complete()` additionally
+requires PROCESSING and must leave an already completed record unchanged.
 
 ```ts
 import type {
@@ -708,16 +745,15 @@ class MyStorage implements IdempotencyStorage, OnModuleDestroy {
     response: CompleteResponse,
     ttlSeconds: number,
   ): Promise<MutateResult> {
-    // Compare-and-set: only mutate the record if its stored token matches
-    // the caller's. Return 'ok' on success; return 'stale' if the token
-    // does NOT match (the original record was evicted and replaced) or if
-    // the record is missing. Refresh `expiresAt` to now + ttlSeconds, but
-    // preserve the original `createdAt`.
+    // Atomically require an unexpired PROCESSING record with this token.
+    // Return 'stale' without mutation for missing, expired, different-token
+    // or already-COMPLETED records. On first success, return 'ok', refresh
+    // `expiresAt` to now + ttlSeconds, and preserve original `createdAt`.
   }
 
   async delete(key: string, token: string): Promise<MutateResult> {
     // Idempotent cleanup: return 'ok' if the record matched-and-was-removed
-    // OR was already absent. Return 'stale' only if a DIFFERENT record
+    // OR was already absent/expired. Return 'stale' only if a live DIFFERENT record
     // (with a different token) exists under this key — in that case, do
     // NOT remove it.
   }
@@ -749,7 +785,7 @@ This package targets the behavior described by [`draft-ietf-httpapi-idempotency-
 - ✅ Binary response detection — Buffer, typed arrays, and Node/Web streams are bypassed rather than cached as JSON garbage
 - ✅ Safe response header replay for `Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers
 - ✅ Outcome observability via `onEvent` and `Idempotency-Status` headers
-- ✅ **Transient storage-write failures** do NOT cause duplicate execution — a failing `complete()` is caught and the handler's response is still emitted to the caller
+- ✅ **Completion failure isolation** — a failing `complete()` preserves the handler's successful value and never triggers deletion; uncertain writes and retries after expiry require business reconciliation
 
 Deferred to future versions:
 
@@ -764,7 +800,7 @@ Deferred to future versions:
 - **Custom fingerprints are caller-defined.** A resolver must be deterministic for the same semantic request. Non-deterministic values such as timestamps or random ids will cause false 422 mismatches.
 - **Processing TTL is a lease, not a transaction.** A short `processingTtl` helps recover stuck records, but if it is shorter than real handler execution time, a retry can acquire the key while the first request is still running.
 - **Replay requires the supported response boundary.** Register idempotency before response transformers. Unsupported values retain their PROCESSING lease and are not replayed; see the response contract and upgrade procedure above.
-- **TTL-expiry race is closed via token-based CAS.** A slow request whose PROCESSING record has been evicted by TTL cannot clobber a newer request's record under the same key — the storage refuses the write and the interceptor logs a `stale token` warning while still emitting the handler's response to the caller.
+- **Token CAS protects record ownership.** Expired or replaced requests cannot complete a newer record, and repeated completion cannot overwrite an established response. Work may still overlap after lease expiry; see the [failure and recovery guide](docs/failure-recovery.md).
 
 ## Roadmap
 

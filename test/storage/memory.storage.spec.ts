@@ -8,6 +8,10 @@ describeStorageContract('MemoryStorage', async () => {
   const storage = new MemoryStorage();
   return {
     storage,
+    expire: async (key) => {
+      const record = await storage.get(key);
+      record!.expiresAt = new Date(Date.now());
+    },
     cleanup: async () => {
       await storage.onModuleDestroy();
     },
@@ -46,8 +50,7 @@ describe('MemoryStorage', () => {
       expect(record!.token).toBe(result.token);
       expect(record!.fingerprint).toBe('fp');
       expect(record!.status).toBe('PROCESSING');
-      const lifetimeMs =
-        record!.expiresAt.getTime() - record!.createdAt.getTime();
+      const lifetimeMs = record!.expiresAt.getTime() - record!.createdAt.getTime();
       expect(lifetimeMs).toBe(10_000);
     });
 
@@ -93,12 +96,7 @@ describe('MemoryStorage', () => {
     });
 
     it('returns "stale" when the key does not exist', async () => {
-      const result = await storage.complete(
-        'missing',
-        'some-token',
-        { statusCode: 200 },
-        10,
-      );
+      const result = await storage.complete('missing', 'some-token', { statusCode: 200 }, 10);
       expect(result).toBe('stale');
     });
 

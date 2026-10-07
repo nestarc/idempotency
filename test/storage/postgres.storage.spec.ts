@@ -40,6 +40,11 @@ describeOrSkip('PostgresStorage', () => {
     const storage = new PostgresStorage({ pool: suitePool, tableName: TABLE_NAME });
     return {
       storage,
+      expire: async (key) => {
+        await suitePool.query(`UPDATE "${TABLE_NAME}" SET expires_at = now() WHERE key = $1`, [
+          key,
+        ]);
+      },
       cleanup: async () => {
         // Don't call storage.close() here — the consumer-supplied pool is
         // reused across tests. afterAll() ends it once at the end.
@@ -110,9 +115,9 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
   });
 
   it('createSchema() rejects unsafe table names', async () => {
-    await expect(
-      PostgresStorage.createSchema(pool, 'evil; DROP TABLE x;--'),
-    ).rejects.toThrow(/invalid identifier/);
+    await expect(PostgresStorage.createSchema(pool, 'evil; DROP TABLE x;--')).rejects.toThrow(
+      /invalid identifier/,
+    );
   });
 
   it('honors a custom tableName option (creates and uses an alternate table)', async () => {

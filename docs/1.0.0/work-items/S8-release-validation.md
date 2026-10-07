@@ -108,7 +108,7 @@ S4 관측 회귀는 전체 event/logger 인자에 심은 가짜 비밀 값, 각 
 검증 명령·실제 pass/fail/skip·artifact는 [S4 작업 기록](S4-observability.md)을 참조한다.
 이 인계 자체는 새 실행 증거가 아니며 이전 S2 tarball 결과를 변경된 타입의 검증으로 재사용하지 않는다.
 
-S5는 미착수/D05 OPEN, S6도 미완료다. S5/S6의 최종 오류·만료 상태 전이를 반영한 commit에서
+이 S4 인계 당시에는 S5/D05가 미착수/OPEN이었다. 아래 S5 인계에서 D05·D06 수명 계약과 오류·만료 전이를 검증했다. S6-5를 포함한 최종 commit에서는
 관측 회귀와 같은 tarball의 소비자 타입 검사를 다시 실행한다. fake storage 장애 결과는
 실제 Redis/PG 장애 주입이나 crash/불명 쓰기 복구 증거를 대신하지 않는다.
 실제 DB 생략 여부, 최종 지원 matrix, RC/출시 판단은 기존 S8 gate를 따른다.
@@ -149,3 +149,39 @@ S1 완료는 S8 또는 1.0 출시 승인으로 해석하지 않는다.
 - 다음 행동: S8-1 지원 matrix를 결정하고 S8-2의 검증 전용 PG/Redis 잡 골격부터 준비한다.
 - 남은 이슈: 지원 정책·artifact 게시 방식 미결; S3–S7 완료와 최종 지원 matrix 통합 검증 대기. S2 대표 환경 증거는 위 인계 참조.
 - S8 자체 구현 검증 증거: 미기록. 위 S1 결과의41개 skip을 최종 출시 통과로 재사용하지 않는다.
+
+### S5 장애·수명 검증 인수인계 (2026-10-07)
+
+[S5 작업 기록](S5-failure-lifecycle.md)과
+[장애·복구 안내](../../failure-recovery.md)에 D05 계약과 운영 조정을 정리했다.
+새 fixture는 다음과 같다.
+
+- [failure-lifecycle.spec.ts](../../../test/regression/failure-lifecycle.spec.ts):
+  storage 동기 throw/rejection, 적용 후 acknowledgment 실패, 취소 뒤 성공/실패/불명,
+  create/complete/delete 진행 중 취소, 내부 timeout, 업무 영향 뒤 예외와 token 대체.
+- [response-capture-failure.spec.ts](../../../test/regression/response-capture-failure.spec.ts):
+  response capture 실패와 상태 헤더 setter 실패가 성공을 handler cleanup으로 보내지 않음.
+- [storage-lifecycle-contract.spec.ts](../../../test/regression/storage-lifecycle-contract.spec.ts):
+  timer/sweep 이전 논리 만료와 반복 완료, 상태·응답·TTL 보존.
+- [failure-lifecycle.real.spec.ts](../../../test/regression/failure-lifecycle.real.spec.ts),
+  [child](../../../test/support/failure-lifecycle-child.ts),
+  [공유 지원](../../../test/support/failure-lifecycle-real.ts): 실제 Redis/PG 공유 상태에서
+  IPC barrier로 순서를 정한 자식 SIGKILL·재시작과 별도 PG 업무 원장 대조.
+
+`npm run test:failure:real`은 `TEST_REDIS_URL`과 `TEST_DATABASE_URL`을 모두 필수로
+요구한다(`S5_REQUIRE_REAL_STORAGE=1`). 일반 Jest는 환경 미제공 시 skip하므로
+출시 gate에서 이 전용 명령과 전체 skip 집계를 함께 사용한다.
+`S5_EVIDENCE_PATH`를 쓰기 가능한 JSON 경로로 지정하면 scenario 증거를 보존한다.
+실제 실행 환경과 pass/fail/skip은 S5 검증 기록을 따르며 이 인계 자체는 새 실행 결과가 아니다.
+
+실험은 Redis/PG 각각 업무 commit 전·후와 complete 뒤 crash, complete 쓰기 전 실패와
+적용 뒤 acknowledgment 실패를 다룬다. 두 adapter 모두 별도 PG transaction을 원장으로 쓰며
+handler 횟수·원장 결과·token/상태·클라이언트 결과를 기록한다. 만료 전 retry를 확인한 후
+테스트 namespace의 Redis PEXPIRE/PG expires_at만 단축해 만료 뒤 retry를 관찰한다.
+이 강제 만료는 검증 장치이며 운영자 unlock 절차가 아니다.
+
+검증 한계: SIGKILL은 실제 프로세스 종료이나 client 결과는 interceptor 경계이며 TCP HTTP
+연결을 끊지 않는다. complete 실패는 adapter 호출 전 또는 성공 응답 뒤 애플리케이션 경계
+주입이며 실제 네트워크 단절/DB failover를 재현하지 않는다. provider 조정·복제 durability,
+최종 Node/Nest matrix와 같은 tarball의 소비자 검증은 S8 최종 대상에서 따로 확인한다.
+S6의 긴 TTL/범위·전체 계약 완료나 S7 전체 recipe 완료를 S5 통과로 대신하지 않는다.

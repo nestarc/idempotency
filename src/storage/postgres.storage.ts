@@ -99,7 +99,7 @@ function createPool(connection: PoolConfig): Pool {
  * Stores each record as a row in `idempotency_records` (override via
  * `tableName`). Atomic NX is enforced by the primary-key constraint on
  * `key` combined with `INSERT ... ON CONFLICT DO UPDATE WHERE
- * expires_at < now()`. Token-based compare-and-set is enforced by
+ * expires_at <= now()`. Token-based compare-and-set is enforced by
  * `WHERE token = $` clauses on `complete()` and `delete()`. Lazy
  * expiration is enforced by `WHERE expires_at > now()` in `get()`.
  *
@@ -124,9 +124,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
       this.pool = factory(options.connection);
       this.ownsPool = true;
     } else {
-      throw new Error(
-        'PostgresStorage: must supply either `pool` or `connection` options',
-      );
+      throw new Error('PostgresStorage: must supply either `pool` or `connection` options');
     }
   }
 
@@ -188,7 +186,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
              response_headers = NULL,
              created_at = now(),
              expires_at = EXCLUDED.expires_at
-         WHERE ${quoteIdent(this.tableName)}.expires_at < now()
+         WHERE ${quoteIdent(this.tableName)}.expires_at <= now()
        RETURNING token`,
       [key, token, fingerprint ?? null, String(ttlSeconds)],
     );
@@ -215,7 +213,8 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
                response_body = $4,
                response_headers = $5,
                expires_at    = now() + ($6 || ' seconds')::interval
-           WHERE key = $1 AND token = $2 AND status = 'PROCESSING'`,
+           WHERE key = $1 AND token = $2 AND status = 'PROCESSING'
+             AND expires_at > now()`,
         [
           key,
           token,
@@ -239,7 +238,8 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
     let deletedCount: number;
     try {
       const del = await this.pool.query(
-        `DELETE FROM ${quoteIdent(this.tableName)} WHERE key = $1 AND token = $2`,
+        `DELETE FROM ${quoteIdent(this.tableName)}
+          WHERE key = $1 AND token = $2 AND expires_at > now()`,
         [key, token],
       );
       deletedCount = del.rowCount ?? 0;
@@ -250,10 +250,10 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
       deletedCount = 0;
     }
     if (deletedCount === 1) return 'ok';
-    // 0 rows affected: either the key is missing (idempotent cleanup → 'ok')
+    // 0 rows affected: the key is absent/expired (idempotent cleanup → 'ok')
     // or a different (real UUID) token owns the row (caller is stale → 'stale').
     const exists = await this.pool.query(
-      `SELECT 1 FROM ${quoteIdent(this.tableName)} WHERE key = $1`,
+      `SELECT 1 FROM ${quoteIdent(this.tableName)} WHERE key = $1 AND expires_at > now()`,
       [key],
     );
     return exists.rowCount === 0 ? 'ok' : 'stale';
@@ -274,10 +274,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
    * Safe to call multiple times. Used by `autoCreateSchema=true` and
    * available as a public helper for code-driven migrations.
    */
-  static async createSchema(
-    pool: Pool,
-    tableName: string = DEFAULT_TABLE_NAME,
-  ): Promise<void> {
+  static async createSchema(pool: Pool, tableName: string = DEFAULT_TABLE_NAME): Promise<void> {
     const ident = quoteIdent(tableName);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${ident} (

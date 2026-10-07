@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01·D02·D03·D04를 결정해 S1·S2·S3·S4에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D05와 D06의 수명 계약을 결정했다. D06의 긴 TTL 세부 정책(S6-5), D07·D08은 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -18,8 +18,8 @@
 | D02 | DECIDED | S2 | Memory/common root, Redis·PG 공식 subpath 분리; PG 타입은 소비자가 설치 | 0.4 root DB import를 /redis·/postgres로 이동; TS5.7.3 CJS node/node16/nodenext |
 | D03 | DECIDED | S3 | 함수형 scope의 identity + endpoint 합성, JSON tuple SHA-256 key v1, raw string/UTF-8 입력 계약 | 기존 키 재사용·혼합 배포 불가; 아래 D03의 업무 중복 방지 전환 전제 필수 |
 | D04 | DECIDED | S4 | raw key와 독립된 namespace, encoded key의 SHA-256, 고정 오류 분류와 안전 로그 | event.scope 제거, 원본 Error 필드 제거; callback 격리 및 현재 오류 경로는 아래 D04, S5/S6 통합 재검증 필요 |
-| D05 | OPEN | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
-| D06 | OPEN | S6 | create/complete/delete의 만료 경계와 반복 complete, 긴 TTL 정책 | Memory/Redis/PG 동일 동작, stale token, custom adapter 변경, schema 필요 여부 |
+| D05 | DECIDED | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
+| D06 | DECIDED | S6 | 만료·token·반복 complete 수명 계약; 긴 TTL 범위는 S6-5 미결 | Memory/Redis/PG 동일 동작, stale token, custom adapter 변경, schema 필요 여부 |
 | D07 | OPEN | S7 | 기존 저장 레코드·키·schema를 사용하는 서비스의 전환과 복구 절차 | 이전 tenant/user 권한 검증, 중복 실행, 롤링 배포·롤백, webhook 보존기간과 업무 DB 확인 |
 | D08 | OPEN | S8 | 지원 Node/Nest/HTTP adapter 조합과 artifact 검증·게시 경로 | Node 20 유지 여부, 22/24 검증, 실DB skip 차단, 동일 artifact 검증, RC 증거 |
 
@@ -123,7 +123,7 @@ D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 �
 - HTTP 헤더: 기본 활성화. headers가 쓰기 가능할 때 `created/replayed/conflict/mismatch/bypassed/stale/complete_error`의 `Idempotency-Status`를 유지하고 replay에만 `Idempotency-Replayed: true`를 생성한다. `storage_error`에 새 HTTP status 또는 status header를 지정하지 않는다. `exposeStatusHeaders: false`이면 패키지가 생성하지 않는다. 두 관측 헤더는 명시적인 replayHeaders allowlist에도 capture/replay하지 않으며 legacy record의 헤더가 비활성화 설정을 우회하지 못한다.
 - 호환성과 진단 한계: 소비자는 event.scope→namespace로 바꾸고 원본 오류 접근을 code/operation 분기로 바꾼다. `IdempotencyEventError`, `IdempotencyStorageOperation`을 root에서 type export하며 S2 fixture에서 검증한다. 원본 오류 상세는 제공하지 않고 metric 예제는 고정 outcome만 사용한다. fingerprint callback의 scope는 별도 API이며 이 전환 대상이 아니다.
 - 회귀와 검증: `test/regression/observability-safety.spec.ts`, `observability-headers-sweep.spec.ts`에서 가짜 비밀 값을 key·body·identity·path·storage/callback/logger/sweep 오류에 넣어 전체 event와 Logger 인자를 검사한다. 각 storage 단계 동기 throw/rejection의 event 횟수, handler 결과, 레코드 보존을 대조하고 callback 실패·헤더 enable/disable·명시 allowlist·과거 저장 헤더를 확인한다. 실제 명령/결과/skip은 [S4 검증 기록](work-items/S4-observability.md)에 기록하며 이 결정만으로 검증 완료를 주장하지 않는다.
-- 후속: S5는 아직 미착수이고 D05는 OPEN, S6/D06도 미결이다. S4에서 현재 오류 경계를 보호했지만 취소/crash/결과 불명/만료 계약은 확정하지 않았다. S5/S6의 최종 상태 전이 반영 뒤 같은 관측 회귀를 재실행한다. S7은 운영 예제/0.4 전환, S8은 동일 tarball 및 최종 지원 matrix 검증으로 인수한다.
+- 후속(초기 S4 인계): 당시 S5/D05·S6/D06은 미결이었다. 2026-10-07 S5에서 D05와 D06 수명 계약을 통합하고 기존 관측 및 취소/capture/불명 쓰기 회귀를 재실행했다. 최종 결과는 S5 기록을 따른다. S7은 운영 예제/0.4 전환, S8은 동일 tarball 및 최종 지원 matrix 검증으로 인수한다.
 
 ## D07 — S3에서 넘긴 전환 전제 (OPEN)
 
@@ -134,3 +134,30 @@ writer가 없는 빈 물리 namespace 및 업무 DB/inbox dedup 또는 과거 �
 구/신 writer 혼합은 지원하지 않으며 rollback도 새 버전이 처리한 업무를 중복 실행하지 못해야 한다.
 S3 회귀에서 alias-only 재실행, 정확한 address 중첩의0.4 body409, 별도 namespace 격리를 확인한다.
 D07 전체는 S5/S6의 실패·만료 계약과 S7 실행 전환 절차가 완성될 때 확정한다.
+
+
+## D05 — 장애와 구독 수명 (DECIDED)
+
+- 날짜/결정자: 2026-10-07, Codex. S5 구현 요청, 기준 `e13b3709651b367441d420239e8b91e69d465ea1`. S1 최종값 경계와 S4 안전 관측을 유지한다. 만료/반복 complete의 선행 계약은 D06 및 S6 인계에 기록한다.
+- handler 오류: 기존 token 조건부 delete를 유지하고 원 오류를 전파한다. sync `next.handle()` throw와 Observable error, 안쪽 timeout 모두 포함한다. cleanup 실패는 원 오류를 바꾸지 않는다. 패키지는 업무 변경 전/후 예외를 구분하지 못하므로 이 결과는 안전한 업무 재시도를 보장하지 않는다. 업무 transaction rollback 또는 durable command ID/inbox/외부 provider dedup은 소비자 책임이다.
+- 오류 경계: handler-error catch를 응답 capture보다 앞에 둔다. 응답 body/status/headers/sent 조회 실패는 `bypassed`/`response_not_replayable`이며 성공 값을 전달하고 PROCESSING을 보존한다. 관측 헤더 쓰기는 best-effort이며 실패해도 업무 결과나 이벤트 분류를 바꾸지 않는다. complete 동기 throw/rejection은 `complete_error` 1회, 성공 값 보존, delete 금지다. get/create/race_get은 원 storage 오류 전파 및 handler 미실행, cleanup 실패는 storage_error/delete 1회다.
+- 불명 쓰기: 오류는 저장 미반영의 증거가 아니다. create 응답 유실은 PROCESSING을 남길 수 있고 complete 응답 유실은 이미 COMPLETED일 수 있다. 자동 재조회/재시도는 추가하지 않는다. 접근 가능한 저장소의 get과 업무 원장/provider 조회를 대조하되 null/PROCESSING/만료만으로 업무 실패를 판정하지 않는다.
+- 취소: 외부 unsubscribe/timeout은 구독을 종료한다. 별도 구독으로 업무를 계속 붙들거나 자동 cleanup하지 않는다. handler 완료 전 취소하면 이후 Promise 업무 성공/실패/불명 모두 capture/delete를 실행하지 않는다. 이미 시작한 create/complete/delete Promise는 중단되지 않아 이후 저장 상태를 바꿀 수 있고 취소한 구독에는 결과/이벤트가 전달되지 않을 수 있다. HTTP disconnect가 Nest 구독 취소와 같은 시점이라는 보장은 없다.
+- 대안과 이유: detached subscription은 무기한 Observable·응답 객체·자원 보존과 shutdown/drain 관리 API를 새로 요구한다. 자동 delete는 취소 뒤 성공할 업무의 중복 실행을 허용한다. 모든 handler 오류의 lease 보존은 기존 retry 호환성을 바꾸지만 업무 완료 여부를 증명하지도 못한다. 기존 cleanup을 유지하고 소비자에게 위험과 durable 업무 중복 방지를 명시한다.
+- timeout 배치: 바깥쪽 timeout은 취소 정책이다. 안쪽 handler timeout은 handler 오류 cleanup이므로 abort/rollback이 확인되지 않은 작업에는 사용하지 않는다. Promise race/timeout만으로 외부 side effect가 중단되지 않는다. 지속 처리·결과 회수가 필요하면 서비스의 durable queue/job 및 별도 상태 조회를 사용한다. 자동 heartbeat/강제 unlock/범용 retry는 제공하지 않는다.
+- lease/stale: 활성 PROCESSING+동일 token만 완료한다. 만료(새 token 없음 포함), 대체 token, 이미 COMPLETED인 token은 stale이며 성공 handler 값은 전달하고 기존 저장소를 변경하지 않는다. lease 만료는 재실행이 가능해지는 경계이며 업무 중단/안전 증거가 아니다.
+- crash 조정: 프로세스 종료는 rollback을 보장하지 않는다. 업무 commit 전, commit 후 complete 전, complete 후 응답 전을 독립 실험하고 ledger·handler 수·token·상태·클라이언트 결과를 기록한다. 결과 불명은 재전송 보류, 성공 확인은 서비스 조정 경로로 결과 반환, 부작용 없음/rollback 확인과 durable dedup이 갖춰진 경우에만 재시도를 판단한다. 저장소와 업무 DB의 범용 원자성/exactly-once는 보장하지 않는다.
+- 호환성: 새 공개 옵션/상태/API/schema 없음. 성공 후 capture 예외가 오류+삭제에서 성공값+bypass 보존으로 바뀐다. D06으로 늦은/반복 complete는 일관되게 stale가 되므로 custom adapter도 따른다. 원본 오류는 이벤트/로그에 추가하지 않는다.
+- 검증/후속: [S5 기록](work-items/S5-failure-lifecycle.md)에 회귀·실제 공유 저장소 자식 프로세스·불명 쓰기 경계 주입 결과를 기록한다. [운영 절차](../failure-recovery.md)를 S7에, 필수 실DB 명령과 대표 환경 한계를 S8에 전달한다. S4 최종 관측 회귀를 함께 재실행한다.
+
+## D06 — 저장소 공통 계약 (DECIDED)
+
+- 날짜/결정자: 2026-10-07, Codex. S5 선행 조건으로 S6-1/2/3/4/6/7의 수명 계약을 확정·구현했다. **긴 TTL/직접 adapter 입력 검증 범위는 S6-5의 미결 세부 정책이며 S6 전체 완료를 뜻하지 않는다.**
+- 만료: Memory/PG는 `expiresAt <= now`부터 논리적으로 부재다. Redis는 서버 TTL을 권위로 삼고 payload의 client-clock expiresAt은 조회용 메타데이터다. 서로 다른 프로세스/DB 시계가 정확히 일치한다는 보장은 추가하지 않는다. physical timer/sweep 실행 여부와 무관하게 get은 null, create는 새 token 획득 가능, complete는 stale, delete는 ok다.
+- complete-once: 활성 PROCESSING + 동일 token만 COMPLETED로 전환하고 성공 응답/headers/새 retention TTL을 저장한다. 최초 createdAt은 유지한다. 같은 token의 반복 또는 동시 complete는 첫 성공 이후 stale이며 최초 응답과 TTL을 바꾸지 않는다. 대체 token이 없어도 만료한 token은 stale다.
+- delete: 활성 소유 token이면 삭제 ok, 활성 다른 token이면 stale로 보존, 부재/만료이면 ok다. PG 만료 행의 물리 삭제를 약속하지 않는다. stale 반환은 업무 실패/중단 또는 안전한 업무 재시도의 증거가 아니다.
+- 구현: Memory 모든 연산의 논리 만료 검사를 공유한다. PG create의 정확한 경계를 <=로 통일하고 complete/delete에 만료 조건을 추가한다. Redis Lua는 token과 읽었던 PROCESSING payload를 함께 비교해 동시 완료 두 개가 모두 성공하지 못하게 한다. body는 S1 opaque string으로 취급한다.
+- 대안/이유: token만 검사하면 lease 권한이 이미 끝난 작업이 응답을 되살릴 수 있다. repeated complete 덮어쓰기/TTL 갱신은 뒤늦은 호출이 최초 확정 결과를 바꾸므로 채택하지 않는다. 동일 token repeated를 ok로 다루는 멱등 확인 API도 도입하지 않는다. 기존 ok/stale 시그니처를 유지하고 이미 완료된 경우 stale로 통일한다.
+- 영향: 공개 시그니처·저장 key·SQL schema 변화 없음. Memory/Redis의 반복 완료, Memory/PG의 늦은 완료 결과가 바뀐다. custom adapter도 위 논리적 만료와 complete-once 원자성을 구현해야 한다. 긴 TTL overflow를 해결했다거나 모든 직접 입력을 검증한다고 주장하지 않는다.
+- 검증: 공유 contract의 동시 create/complete, 응답/TTL/createdAt 보존, 만료와 대체 token, Memory -1/0/+1ms, PG transaction의 고정 now 경계, 실제 Redis 서버 expiry를 검사했다. [S6 기록](work-items/S6-storage-contract.md)의 143 pass/0 skip 및 [S5 기록](work-items/S5-failure-lifecycle.md)의 최종 통합 결과를 따른다.
+- 후속: S6-5는 긴 TTL 및 직접 호출 입력 책임을 확정하고 같은 공통 suite를 재실행한다. S7에는 custom adapter 호환성, S8에는 실제 DB/지원 버전 전체 검증을 넘긴다.

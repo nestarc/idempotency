@@ -21,17 +21,17 @@
 - [x] **S4-1** 고유한 가짜 비밀 키를 사용해 onEvent 전체 객체와 logger 인자를 검사하는 회귀 테스트를 작성한다. hash 필드만 확인하지 않는다.
 - [x] **S4-2** D04에 namespace·키 hash·오류 payload 계약과 기존 event 소비자 전환 영향을 기록한다.
 - [x] **S4-3** 이벤트와 내부 로그에 공통 마스킹 방식을 적용한다. 성공, bypass, stale, complete error, cleanup error, callback error를 포함한다.
-- [ ] **S4-4** get/create/경합 get/complete/delete의 실패 경로를 S5와 대조하고, 어떤 event를 몇 번 내보내는지 테스트로 고정한다.
+- [x] **S4-4** get/create/경합 get/complete/delete의 실패 경로를 S5와 대조하고, 어떤 event를 몇 번 내보내는지 테스트로 고정한다.
 - [x] **S4-5** callback의 동기 throw와 Promise rejection, status header 비활성화에서 원 요청의 성공·실패·레코드 상태가 유지되는지 확인한다.
 - [x] **S4-6** S2에 변경된 타입 export를, S7에 raw key/body를 기록하지 않는 운영 예제와 호환성 주의사항을 전달한다.
 
-S4-4의 현재 5개 호출 경로는 동기 throw/Promise rejection과 callback 실패 조합까지 회귀로 고정했다. S5 문서의 기존 실패 경로와 대조하고 동기 complete/delete 경계를 선반영했다. **D05·D06 및 S5 최종 파이프라인은 미확정이므로 최종 대조 완료로 표시하지 않는다.** 이 체크는 S5 통합 후 같은 회귀와 추가 취소·결과 불명 경로를 검증한 뒤 닫는다.
+S4-4의 현재 5개 호출 경로는 동기 throw/Promise rejection과 callback 실패 조합까지 회귀로 고정했다. S5 문서의 기존 실패 경로와 대조하고 동기 complete/delete 경계를 선반영했다. 초기에는 D05·D06 미확정으로 열어 두었으며, 2026-10-07 S5 통합 후 같은 회귀와 추가 취소·capture·결과 불명 경로를 검증해 닫았다. 최종 증거는 아래 S5 인계를 따른다.
 
 ## 완료 조건
 
 - [x] 모든 패키지 생성 이벤트·로그의 검사 대상 필드에서 가짜 원본 키를 찾을 수 없다. 원본 키가 포함된 저장소 오류 메시지 사례도 결정한 처리와 일치한다.
 - [x] S3의 저장 키 인코딩 변경이 keyHash·namespace에 미치는 영향이 기록되어 있다.
-- [ ] S5가 정의한 오류 경로에서 관측 누락·중복을 검증했고 callback 실패가 HTTP 응답이나 저장소 정리를 바꾸지 않는다.
+- [x] S5가 정의한 오류 경로에서 관측 누락·중복을 검증했고 callback 실패가 HTTP 응답이나 저장소 정리를 바꾸지 않는다.
 - [x] status header 노출/비노출과 replay 헤더 정책이 문서·테스트와 일치한다.
 - [x] 기존 event.scope 소비자가 조정할 사항과 진단 정보의 한계를 기록했다. metric label에 요청별 keyHash를 무제한 사용하도록 예제를 쓰지 않는다.
 
@@ -73,7 +73,7 @@ identity·동적 path의 hash는 암호화가 아니고 추측 및 cardinality �
 - 검사: fake key/body/response/identity/path와 오류 message/stack/cause/비열거 필드까지 전체 JSON 및 `util.inspect(showHidden: true)`로 확인한다. sweep는 fake pool 장애를 사용하며 실제 DB 장애 주입 증거가 아니다.
 - S5에 남기는 한계: D05/D06 최종 실패·취소·crash·만료 계약과 실제 DB 결과 불명 쓰기는 미검증이다. 기존 HTTP response getter/header setter 예외와 capture 후처리 경계도 S5에서 분리한다. `captureResponse`의 기존 total 주석을 모든 어댑터/HTTP 예외에 대한 보장으로 읽지 않는다.
 - 로깅 한계: 직접 호출한 Logger 메서드의 throw/반환 Promise는 격리한다. Nest가 내부에서 버리는 custom async transport Promise는 패키지가 관찰할 수 없으며 transport가 자체 처리해야 한다.
-- 다음 행동: S5/D05와 S6/D06을 확정·통합한 뒤 아래 관측 회귀를 다시 실행하고 S4-4 및 남은 완료 조건을 닫는다. 작업판의 S4는 그때까지 IN_PROGRESS로 유지한다.
+- 당시 다음 행동: S5/D05·S6/D06 수명 계약 통합 후 회귀를 재실행하고 S4-4를 닫는 것이었다. 아래 S5 최종 통합 기록에서 완료했다.
 - 인계: S2 새 `IdempotencyEventError`/`IdempotencyStorageOperation` export, S5 오류별 1회 관측, S7 event.scope→namespace 및 오류 code/operation 전환, S8 tarball/최종 matrix 재검증.
 
 ## 검증 증거 — 2026-10-07
@@ -89,3 +89,19 @@ identity·동적 path의 hash는 암호화가 아니고 추측 및 cardinality �
 | 실제 tarball 소비자 | `npm run test:consumers` 성공, 41 pass / 기대된 타입 실패 3 / 0 skip | `/private/tmp/idempotency-consumers-fvsLTs/summary.json`; root 공개 타입·node/node16/nodenext·Memory/Redis/PG 실행 |
 
 Node24.11.1/Nest11 대표 환경이다. 실제 저장소 정상 contract 검증과 fake storage/pool의 오류 주입을 구분한다. S8 전체 지원 matrix·실제 장애 실험·릴리스 승인을 대신하지 않는다.
+
+
+### S5 최종 통합 검증 (2026-10-07)
+
+S5/D05 및 S6/D06 수명 계약을 반영한 최종 파이프라인으로 기존 payload·callback·header/sweep
+회귀를 모두 재실행했다. capture 예외는 bypassed, complete 실패는 complete_error,
+handler cleanup 실패는 storage_error/delete로1회이며 성공 후 delete 경로는 분리됐다.
+취소된 구독에서 pending storage Promise가 반영돼도 이벤트/헤더는 보장하지 않는다.
+관측 헤더 쓰기 실패는 원 결과와 이벤트 분류를 유지한다. FakeStorage가 논리적 만료를 따르게 돼
+기존 고정 과거 날짜 seed를 현재+60초로 수정했다.
+
+`npm run prepublishOnly` **36 suites / 768 pass / 0 skip**, 개발 타입 검사 성공,
+실제 tarball 소비자 **41 pass / 기대된 실패3 / 0 skip**. S4-4 및 남은 완료 조건을 충족했다.
+검증 대상/명령/원시 증거는 [S5 기록](S5-failure-lifecycle.md)과
+[S5 JSON](../evidence/S5-validation.json)을 따른다. 기존 S4 JSON의 통합 대기 표기는 당시 기록이다.
+S6 긴 TTL/입력 정책 및 S8 전체 matrix는 별도 작업이다.

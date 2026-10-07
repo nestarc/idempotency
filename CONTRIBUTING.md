@@ -41,6 +41,16 @@ logs and a checksum. See [consumer fixtures](test/consumers/README.md).
 skips; it is insufficient for S2/S8 completion. CI/release integration of this
 runner and the final supported version matrix are tracked in S8.
 
+### Failure lifecycle experiments
+
+Set test-only `TEST_REDIS_URL` and `TEST_DATABASE_URL`, then run
+`npm run test:failure:real`. Both are mandatory for this command. The fixture
+uses real child-process SIGKILL, IPC gates, isolated storage namespaces and a
+PostgreSQL business ledger. Set `S5_EVIDENCE_PATH` to retain JSON observations.
+See [failure recovery](docs/failure-recovery.md) and [S5 evidence](docs/1.0.0/work-items/S5-failure-lifecycle.md)
+for the distinction between real worker crashes, application-boundary rejection,
+and untested network/server failure modes.
+
 ## Changing the `IdempotencyStorage` contract
 
 If your PR modifies `src/interfaces/idempotency-storage.interface.ts`,
@@ -50,14 +60,20 @@ must also update the **shared storage contract test suite** at
 custom) runs against this suite — any behavioral drift is caught as a
 shared failure, not a per-adapter regression.
 
-Both built-in adapters (`MemoryStorage`, `RedisStorage`) plug into the
-suite at the top of their respective spec files:
+All built-in adapters (`MemoryStorage`, `RedisStorage`, `PostgresStorage`) plug into
+the suite in their respective spec files. Each harness must provide an expiry
+control that does not call get/delete to clean the expired record first:
 
 ```ts
 describeStorageContract('MemoryStorage', async () => {
   const storage = new MemoryStorage();
   return {
     storage,
+    expire: async (key) => {
+      const record = await storage.get(key);
+      if (!record) throw new Error('Expected a live test record');
+      record.expiresAt = new Date(Date.now());
+    },
     cleanup: async () => { await storage.onModuleDestroy(); },
   };
 });

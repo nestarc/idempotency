@@ -75,7 +75,7 @@ status header 기본값은 유지하며 비활성화 시 과거 record의 관측
 `Idempotency-Status`/`Idempotency-Replayed`는 명시 allowlist에도 capture/replay 금지다.
 
 S7 자체 실행 예제 검증은 여전히 남아 있다. README 관측 부분 갱신을 전체 도입 문서 완성으로
-간주하지 않는다. D05/D06/D07은 OPEN이며 최종 실패·취소·만료/복구 recipe는 S5/S6 인계 후 작성한다.
+간주하지 않는다. 이 초기 인계 당시 D05/D06/D07은 OPEN이었다. 현재 D05와 D06 수명 계약·복구 절차는 아래 S5 인계에 확정됐으며 D07과 S6-5는 남아 있다.
 S4의 실제 명령·검증 제한은 [S4 작업 기록](S4-observability.md)을 따른다.
 
 ### S3 / D07 전환 인수인계 (2026-10-07)
@@ -139,3 +139,36 @@ legacy/corrupt COMPLETED도409이며 새 body는 opaque string이다. 키/schema
 - 미결: D07 및 선행 D05·D06. D01·D02·D03·D04는 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
 - 인계 대상: S8에 실행 예제 목록, 공식 import/지원 구성, 업그레이드·롤백 테스트와 남은 제한을 전달한다.
 - 검증 기록: 대상 commit/artifact, 환경, 명령, pass/fail/skip, 증거와 남은 제한을 실행 후 기록한다.
+
+### S5 장애·복구 문서 인수인계 (2026-10-07)
+
+[D05](../decisions.md#d05--장애와-구독-수명-decided)와
+[장애·복구 운영 안내](../../failure-recovery.md)에 단계별 업무 결과, 저장 상태,
+클라이언트 결과와 재시도 조건을 정리했다. README의 무조건적인 at-most-once 및
+완료 저장 실패의 중복 실행 방지 표현을 제한하고 CHANGELOG에 호환성 영향을 기록했다.
+이 인계가 S7 전체 도입 예제 또는 D07 마이그레이션 완료를 의미하지 않는다.
+
+- handler 오류(내부 timeout 포함)는 기존 token-delete 정책을 유지한다. 업무 commit 뒤
+  오류도 삭제될 수 있으므로 durable business command ID와 외부 provider 중복 방지가 필요하다.
+- 외부 timeout/unsubscribe는 source를 teardown하고 detached 실행을 만들지 않는다.
+  이후 업무 성공/실패는 complete/delete하지 않지만 이미 시작한 storage Promise는
+  적용될 수 있다. 취소 뒤 해당 결과의 이벤트/상태 헤더 전달을 보장하지 않는다.
+- capture 실패는 `bypassed`와 PROCESSING 보존, complete 실패는 성공 값 보존과
+  `complete_error`다. 적용 후 acknowledgment 실패는 COMPLETED일 수 있으므로
+  이벤트만으로 최종 저장 상태를 판단하지 않는다.
+- `expiresAt <= now`는 부재이며 complete는 active PROCESSING + 동일 token만 허용한다.
+  만료·대체·반복 완료는 stale이며 기존 응답/TTL/createdAt을 바꾸지 않는다.
+  이 S5 필수 계약 통합과 S6 전체 완료(긴 TTL·검증 범위)는 구분한다.
+- 운영 예제는 tenant-scoped command 원장과 provider 상태를 대조한다. 결과 불명은
+  TTL 뒤에도 재전송을 보류하고, 성공은 애플리케이션 조정 경로로 기존 결과를 제공한다.
+  확정적 무효과 실패이고 옛 worker도 commit할 수 없을 때만 durable dedup 하에서 재시도한다.
+
+`storage.get()`은 이미 알고 있는 저장 주소만 조회한다. raw key 조회 helper·복구 endpoint·
+강제 unlock API를 문서에서 만들어 내지 않는다. 저장 주소는 event.keyHash와 다르고,
+namespace는 tenant 원문이나 Redis prefix가 아니다. 주소 확인이 필요한 경우 제한된
+adapter 계측/저장소 조사를 소비자 쪽에서 마련하며, 원장 조회를 우선한다.
+자동 retry·heartbeat·exactly-once·트래픽을 멈추면 안전하다는 보장을 추가하지 않는다.
+
+실행 fixture와 검증 한계는 [S5](S5-failure-lifecycle.md)를 따른다. 다음 S7 작업은 실제
+소비자 application의 command 원장/provider 연동 및 업그레이드·rollback recipe를
+검증하고 D07에 남은 S6 TTL 범위/최종 adapter 증거를 통합하는 것이다.

@@ -15,6 +15,9 @@ describeStorageContract('RedisStorage', async () => {
   const storage = new RedisStorage({ client });
   return {
     storage,
+    expire: async (key) => {
+      await client.pexpire(`idempotency:${key}`, 0);
+    },
     cleanup: async () => {
       await client.flushall();
       await client.quit();
@@ -112,12 +115,7 @@ describe('RedisStorage', () => {
 
       await new Promise((r) => setTimeout(r, 5));
 
-      await storage.complete(
-        'K1',
-        token!,
-        { statusCode: 200, body: '{}' },
-        3600,
-      );
+      await storage.complete('K1', token!, { statusCode: 200, body: '{}' }, 3600);
       const completed = await storage.get('K1');
       expect(completed!.createdAt.getTime()).toBe(originalCreatedAt.getTime());
     });
@@ -151,12 +149,7 @@ describe('RedisStorage', () => {
     it('passes through nested JSON bodies without double-encoding', async () => {
       const { token } = await storage.create('K1', 'fp', 10);
       const nested = '{"nested":{"a":1,"b":[2,3]}}';
-      await storage.complete(
-        'K1',
-        token!,
-        { statusCode: 200, body: nested },
-        60,
-      );
+      await storage.complete('K1', token!, { statusCode: 200, body: nested }, 60);
       const record = await storage.get('K1');
       expect(record!.responseBody).toBe(nested);
     });

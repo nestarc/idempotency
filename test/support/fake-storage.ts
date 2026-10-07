@@ -29,7 +29,7 @@ export class FakeStorage implements IdempotencyStorage {
 
   get = jest.fn(async (key: string): Promise<IdempotencyRecord | null> => {
     this.ledger.push({ op: 'get', key });
-    return this.records.get(key) ?? null;
+    return this.getLiveRecord(key) ?? null;
   });
 
   create = jest.fn(
@@ -38,7 +38,7 @@ export class FakeStorage implements IdempotencyStorage {
       fingerprint: string | undefined,
       ttlSeconds: number,
     ): Promise<CreateResult> => {
-      if (this.records.has(key)) {
+      if (this.getLiveRecord(key)) {
         this.ledger.push({ op: 'create', key, acquired: false });
         return { acquired: false };
       }
@@ -64,8 +64,8 @@ export class FakeStorage implements IdempotencyStorage {
       response: CompleteResponse,
       ttlSeconds: number,
     ): Promise<MutateResult> => {
-      const existing = this.records.get(key);
-      if (!existing || existing.token !== token) {
+      const existing = this.getLiveRecord(key);
+      if (!existing || existing.token !== token || existing.status !== 'PROCESSING') {
         this.ledger.push({
           op: 'complete',
           key,
@@ -95,7 +95,7 @@ export class FakeStorage implements IdempotencyStorage {
   );
 
   delete = jest.fn(async (key: string, token: string): Promise<MutateResult> => {
-    const existing = this.records.get(key);
+    const existing = this.getLiveRecord(key);
     if (!existing) {
       this.ledger.push({ op: 'delete', key, result: 'ok' });
       return 'ok';
@@ -118,5 +118,14 @@ export class FakeStorage implements IdempotencyStorage {
     const token = record.token ?? randomUUID();
     this.records.set(record.key, { ...record, token });
     return token;
+  }
+
+  private getLiveRecord(key: string): IdempotencyRecord | undefined {
+    const record = this.records.get(key);
+    if (record && record.expiresAt.getTime() <= Date.now()) {
+      this.records.delete(key);
+      return undefined;
+    }
+    return record;
   }
 }
