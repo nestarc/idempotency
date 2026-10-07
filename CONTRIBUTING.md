@@ -108,6 +108,11 @@ describeStorageContract('MemoryStorage', async () => {
 
 ## Writing regression tests
 
+See [test/README.md](test/README.md) for test boundaries, the complete audit,
+real-service commands and recorded defect-injection evidence. `npm run
+test:mutations -- --output /tmp/idempotency-mutations` runs selected defects in an
+isolated source copy and fails on surviving mutations or invalid evidence.
+
 Any bug fix must land alongside a regression test under
 `test/regression/`. The test must:
 

@@ -48,7 +48,9 @@ TypeScript는 `strict: true`, `skipLibCheck: false`에서 `node`, `node16`, `nod
 
 `common/public-api.ts`는 루트의 공개 storage/options/callback/event 타입과 상수를 사용한다. 어댑터 타입은 각각 `@nestarc/idempotency/redis`, `@nestarc/idempotency/postgres`에서 가져온다. Postgres sweep 타입과 클래스도 Postgres 경로에서 검사한다. 런타임 검사는 SQL 공개 경로와 차단된 내부 `dist/`, `src/` 경로도 확인한다.
 
-Memory 런타임은 DB 드라이버 없이 두 어댑터 경로를 import할 수 있는지, `connection`으로 생성할 때 빠진 드라이버와 설치 명령을 설명하는 오류가 발생하는지도 검사한다. 실제 Redis/PG smoke는 Nest `create/init/close` 안에서 `create/get/complete/delete`, 중복 생성 차단, 응답 보존을 검사한다. Redis는 실행별 prefix를 사용하고 클라이언트를 닫는다. Postgres는 실행별 테이블을 만들고 검사 후 삭제하며 pool을 닫는다.
+Memory 런타임은 DB 드라이버 없이 두 어댑터 경로를 import할 수 있는지, `connection`으로 생성할 때 빠진 드라이버와 설치 명령을 설명하는 오류가 발생하는지도 검사한다. 실제 Memory/Redis/PG smoke는 Nest `create/init/close` 안에서 동시 생성 8개의 소유자 1개 보장, 패자 token 미발급, stale token의 complete/delete 거절, 완료 응답·TTL의 재완료 불변성, 잘못된 TTL 거절, `create/get/complete/delete` 결과를 검사한다. 로그의 `PASS` 문자열은 판정 조건이 아니며 모든 단언이 완료된 프로세스의 종료 코드를 검사한다. Redis는 실행별 prefix 아래 생성된 HTTP 응답 키까지 정리하고 클라이언트를 닫는다. Postgres는 실행별 테이블을 만들고 검사 후 삭제하며 pool을 닫는다.
+
+공통 [`http-contract.ts`](common/http-contract.ts)는 설치한 패키지의 실제 Memory/Redis/Postgres storage를 각각 Nest interceptor에 등록하고 TCP 요청으로 핵심 흐름을 검증한다. 첫 handler를 명시적으로 대기시킨 동안 동일 요청은 409, 변경 payload는 422여야 한다. 첫 요청이 완료된 뒤 동시 재요청 4개는 원래 status/body/content-type을 반환하고 handler 실행 횟수는 1이어야 한다. 별도 키는 handler를 다시 실행하여 다른 receipt를 생성해야 한다. 임의 sleep이나 `PASS` 출력으로 성공을 추정하지 않는다. HTTP 요청에는 5초 제한을 두며 대기 중인 handler는 실패 경로에서도 해제한다.
 
 ## S7 실행 가능한 도입 예제
 
@@ -59,7 +61,7 @@ Memory 런타임은 DB 드라이버 없이 두 어댑터 경로를 import할 수
 | [`memory/examples.ts`](memory/examples.ts)               | quickstart의 전역/컨트롤러/메서드 interceptor 등록; HTTP 201 및 정상 replay; idempotency→serializer 순서와 제외 필드 미노출; payload 변경 422; 검증된 tenant/user 별 격리; 인증 회수 후 replay 전에 401; 고정 outcome 관측                     |
 | [`memory/http-adapters.ts`](memory/http-adapters.ts)     | Express와 Fastify 각각 NestFactory create/init/listen; 실제 TCP 첫 요청 201·정상 replay·본문/Content-Type 일치·payload 변경 422·handler 1회·close                                                                                              |
 | [`redis/examples.ts`](redis/examples.ts)                 | 공식 `new RedisStorage({ client, keyPrefix })`; 모든 sync/async 모듈 등록; Nest close 뒤 외부 client PING 성공; async `connection`으로 만든 실제 client는 close 뒤 end 상태                                                                    |
-| [`postgres/examples.ts`](postgres/examples.ts)           | 공식 `new PostgresStorage({ pool })`; 모든 sync/async 모듈 등록; README sweep provider wiring compile/init/close; 동일 Pool로 실제 만료 row만 제거; Nest close 뒤 외부 Pool SELECT 성공; async `connection`으로 만든 실제 Pool은 close 뒤 종료 |
+| [`postgres/examples.ts`](postgres/examples.ts)           | 공식 `new PostgresStorage({ pool })`; 모든 sync/async 모듈 등록; README sweep provider wiring compile/init/close; 동일 Pool로 실제 만료 row만 제거하고 기존 HTTP 응답 row와 유효 row 보존; Nest close 뒤 외부 Pool SELECT 성공; async `connection`으로 만든 실제 Pool은 close 뒤 종료 |
 
 Memory의 인증 토큰 목록은 테스트용 verifier다. 실제 서비스는 자신이 검증한 인증/권한 정보를 사용한다. HTTP 예제의 결제 handler는 영속 업무 원장이나 실제 결제 provider가 아니며, 업무 중복 방지와 결과 불명 조정은 [도입 recipe](../../docs/adoption-recipes.md) 및 해당 회귀 검증의 범위다. `client`/`pool`로 주입한 외부 연결은 호출자가 마지막 `quit()`/`end()`를 수행한다. fixture는 Nest 종료가 이 외부 연결을 닫지 않았음을 확인한 뒤 정리한다. `connection` 구성은 공개 `clientFactory`/`poolFactory`로 실제 생성된 연결을 관찰하고 Nest가 어댑터 소유 연결을 종료했는지 별도로 확인한다.
 
@@ -70,3 +72,9 @@ Memory의 인증 토큰 목록은 테스트용 verifier다. 실제 서비스는 
 실행 결과 디렉터리에는 tarball SHA-256, 실행 환경, Git 기준점과 working tree 상태, `summary.json`, 명령별 로그, tarball 파일 목록, 소비자별 `package-lock.json`과 설치 목록이 남는다. summary의 `nestMajor`, `peerProfile`, `versions`에 선택값과 정확한 pin을, `consumers.*.installedVersions`에 실제 설치한 직접 의존성 버전을 기록한다. HTTP 결과는 `memory-express-http`, `memory-fastify-http`로 따로 기록한다. 직접 의존성은 fixture와 공통 matrix 설정에서 고정되며 전이 의존성까지 같은 설치를 재현하려면 해당 실행에서 보존한 lockfile을 사용한다. 보존할 때 `node_modules`를 제외하고 실행 결과·lockfile·로그를 함께 수집한다.
 
 S8은 성공/기대된 실패/생략 결과와 실제 서비스 환경을 함께 인계받아 최종 지원 matrix를 다시 실행한다. 최종 증거는 [S2 작업 문서](../../docs/1.0.0/work-items/S2-consumer-package.md), [S7 작업 문서](../../docs/1.0.0/work-items/S7-adoption-docs.md), [S8 작업 문서](../../docs/1.0.0/work-items/S8-release-validation.md)에 기록한다.
+
+## 검증 범위 구분
+
+`consumer.ts`, `common/public-api.ts`와 `@ts-expect-error` 항목은 공개 선언의 소비 가능성과 금지된 타입을 검사한다. 이 타입 검사를 런타임 기능 검증으로 계산하지 않는다. `common/baseline.ts`와 실행기의 `--baseline` import 검사는 0.4.0의 선택 드라이버 의존성 실패를 재현하는 최소 fixture이며 최신 기능 예제로 교체하지 않는다. 실행기가 사용하지 않던 중복 `baseline.cjs`는 제거했다. 패키지와 TypeScript의 고정 버전은 지원 matrix의 의도적인 검증 기준이다.
+
+`test/release/release-gates.test.mjs`의 합성 JSON·tar archive는 증거 검증기의 거절 조건만 검사한다. 실제 Git commit, 서비스 또는 실행 가능한 패키지를 입증하지 않으며, 실제 배포 검증은 이 소비자 실행기와 출시 matrix가 담당한다.

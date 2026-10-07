@@ -39,8 +39,11 @@ export async function runPostgresExamples(
     await module.init();
     assert.equal(module.get(IDEMPOTENCY_STORAGE), storage);
     assert.equal(module.get<PostgresStorage>(IDEMPOTENCY_STORAGE).pool, pool);
-    await storage.create('sweep-expired', 'expired', 60);
-    await storage.create('sweep-active', 'active', 60);
+    const retained = await pool.query<{ key: string }>(
+      `SELECT key FROM "${tableName}" ORDER BY key`,
+    );
+    assert.equal((await storage.create('sweep-expired', 'expired', 60)).acquired, true);
+    assert.equal((await storage.create('sweep-active', 'active', 60)).acquired, true);
     // Make one row expired in the database without triggering lazy get() cleanup.
     // tableName is generated locally from randomUUID by runtime.cjs.
     assert.match(tableName, /^consumer_[a-f0-9]+$/);
@@ -52,7 +55,7 @@ export async function runPostgresExamples(
     const rows = await pool.query<{ key: string }>(`SELECT key FROM "${tableName}" ORDER BY key`);
     assert.deepEqual(
       rows.rows.map((row) => row.key),
-      ['sweep-active'],
+      [...retained.rows.map((row) => row.key), 'sweep-active'].sort(),
     );
   } finally {
     await module.close();
@@ -74,7 +77,12 @@ async function verifyOwnedPostgresConnection(
       IdempotencyModule.forRootAsync({
         useFactory: async () => ({
           storage: new PostgresStorage({
-            connection: { connectionString, connectionTimeoutMillis: 5000, max: 1 },
+            connection: {
+              connectionString,
+              connectionTimeoutMillis: 5000,
+              query_timeout: 5000,
+              max: 1,
+            },
             // The public factory seam observes the real adapter-owned connection.
             poolFactory: (connection) => {
               const owned = new Pool(connection);
@@ -100,7 +108,8 @@ async function verifyOwnedPostgresConnection(
     assert.equal(record.acquired, true);
     assert.equal((await storage.get('owned-command'))?.status, 'PROCESSING');
     assert.ok(record.token);
-    await storage.delete('owned-command', record.token);
+    assert.equal(await storage.delete('owned-command', record.token), 'ok');
+    assert.equal(await storage.get('owned-command'), null);
     await module.close();
     closed = true;
     await assert.rejects(owned.query('SELECT 1'), /Cannot use a pool after calling end/);

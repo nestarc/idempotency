@@ -9,6 +9,7 @@
  *   2. Two concurrent `create()` calls under contention yield exactly
  *      one acquired:true and one acquired:false (NX semantics).
  */
+import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 
 import { PostgresStorage } from '../../src/storage/postgres.storage';
@@ -16,22 +17,29 @@ import { PostgresStorage } from '../../src/storage/postgres.storage';
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
-// Per-spec table isolation: jest runs spec files in parallel; each PG spec
-// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
-const TABLE_NAME = 'idempotency_records_regression';
+// Per-run table isolation also protects concurrent Jest processes and local
+// developers sharing the same test database from TRUNCATE/DROP interference.
+const TABLE_NAME = `test_pg_adapter_${randomUUID().replace(/-/g, '')}`;
 
-describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
+describeOrSkip('PostgresStorage ownership and contention regressions', () => {
   let pool: Pool;
   let storage: PostgresStorage;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: DATABASE_URL });
+    pool = new Pool({
+      connectionString: DATABASE_URL,
+      connectionTimeoutMillis: 5_000,
+      query_timeout: 10_000,
+    });
     await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
-    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
-    await pool.end();
+    try {
+      await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
+    } finally {
+      await pool.end();
+    }
   });
 
   beforeEach(async () => {
@@ -54,29 +62,32 @@ describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
 
     // The original caller's complete() must report stale — they no longer
     // own the row.
-    const stale = await storage.complete(
-      'rk',
-      oldToken!,
-      { statusCode: 200, body: '{}' },
-      60,
-    );
+    const stale = await storage.complete('rk', oldToken!, { statusCode: 200, body: '{}' }, 60);
     expect(stale).toBe('stale');
+    expect(await storage.get('rk')).toMatchObject({
+      token: second.token,
+      fingerprint: 'fp',
+      status: 'PROCESSING',
+      responseBody: undefined,
+    });
 
     // The new owner can still complete normally.
-    const ok = await storage.complete(
-      'rk',
-      second.token!,
-      { statusCode: 200, body: '{}' },
-      60,
-    );
+    const ok = await storage.complete('rk', second.token!, { statusCode: 200, body: '{}' }, 60);
     expect(ok).toBe('ok');
+    const completed = await storage.get('rk');
+    expect(completed).toMatchObject({
+      token: second.token,
+      status: 'COMPLETED',
+      statusCode: 200,
+      responseBody: '{}',
+    });
+    await expect(storage.delete('rk', oldToken!)).resolves.toBe('stale');
+    expect(await storage.get('rk')).toEqual(completed);
   });
 
   it('NX semantics under concurrent creation: exactly one wins', async () => {
     const fps = ['fp1', 'fp2', 'fp3', 'fp4', 'fp5'];
-    const results = await Promise.all(
-      fps.map((fp) => storage.create('cc', fp, 60)),
-    );
+    const results = await Promise.all(fps.map((fp) => storage.create('cc', fp, 60)));
 
     const winners = results.filter((r) => r.acquired);
     const losers = results.filter((r) => !r.acquired);
@@ -93,5 +104,7 @@ describeOrSkip('PostgresStorage v0.1.3 regression parity', () => {
     const row = await storage.get('cc');
     expect(row!.token).toBe(winners[0].token);
     expect(row!.fingerprint).toBe(fps[winnerIdx]);
+    expect(row!.status).toBe('PROCESSING');
+    expect(winners[0].token).toEqual(expect.any(String));
   });
 });

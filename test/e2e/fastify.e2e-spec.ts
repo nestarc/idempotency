@@ -22,6 +22,8 @@ import { IdempotencyModule } from '../../src/idempotency.module';
 import { MemoryStorage } from '../../src/storage/memory.storage';
 
 const calls = { create: 0, capture: 0, headers: 0 };
+const storage = new MemoryStorage();
+let inFlight: { entered: () => void; release: Promise<void> } | undefined;
 
 @Controller('fastify-payments')
 class FastifyPaymentsController {
@@ -29,8 +31,12 @@ class FastifyPaymentsController {
   @HttpCode(201)
   @Idempotent()
   @UseInterceptors(IdempotencyInterceptor)
-  create(@Body() dto: { amount: number }) {
+  async create(@Body() dto: { amount: number }) {
     calls.create += 1;
+    if (inFlight) {
+      inFlight.entered();
+      await inFlight.release;
+    }
     return { id: `fp_${calls.create}`, amount: dto.amount };
   }
 
@@ -46,6 +52,8 @@ class FastifyPaymentsController {
     calls.headers += 1;
     reply.header('Location', `/fastify-payments/fp_header_${calls.headers}`);
     reply.header('X-Request-Id', `fastify_req_${calls.headers}`);
+    reply.header('Set-Cookie', 'session=first-response-only; HttpOnly');
+    reply.header('Private-Trace', 'first-response-only');
     return { id: `fp_header_${calls.headers}`, amount: dto.amount };
   }
 
@@ -62,7 +70,7 @@ class FastifyPaymentsController {
 @Module({
   imports: [
     IdempotencyModule.forRoot({
-      storage: new MemoryStorage(),
+      storage,
       scope: 'endpoint',
     }),
   ],
@@ -89,7 +97,8 @@ describe('Idempotency Fastify adapter (e2e)', () => {
     await app.close();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await storage.onModuleDestroy();
     calls.create = 0;
     calls.capture = 0;
     calls.headers = 0;
@@ -103,6 +112,7 @@ describe('Idempotency Fastify adapter (e2e)', () => {
 
     expect(first.status).toBe(201);
     expect(first.body).toEqual({ id: 'fp_1', amount: 100 });
+    expect(first.headers['idempotency-status']).toBe('created');
 
     const second = await request(app.getHttpServer())
       .post('/fastify-payments')
@@ -111,6 +121,8 @@ describe('Idempotency Fastify adapter (e2e)', () => {
 
     expect(second.status).toBe(201);
     expect(second.body).toEqual(first.body);
+    expect(second.headers['idempotency-status']).toBe('replayed');
+    expect(second.headers['idempotency-replayed']).toBe('true');
     expect(calls.create).toBe(1);
   });
 
@@ -120,10 +132,11 @@ describe('Idempotency Fastify adapter (e2e)', () => {
       .send({ amount: 50 });
 
     expect(res.status).toBe(400);
+    expect(calls.create).toBe(0);
   });
 
   it('returns 422 when the same key is reused with a different body', async () => {
-    await request(app.getHttpServer())
+    const original = await request(app.getHttpServer())
       .post('/fastify-payments')
       .set('Idempotency-Key', 'fastify-mismatch')
       .send({ amount: 100 });
@@ -134,6 +147,54 @@ describe('Idempotency Fastify adapter (e2e)', () => {
       .send({ amount: 999 });
 
     expect(conflicting.status).toBe(422);
+    expect(conflicting.headers['idempotency-status']).toBe('mismatch');
+    const replay = await request(app.getHttpServer())
+      .post('/fastify-payments')
+      .set('Idempotency-Key', 'fastify-mismatch')
+      .send({ amount: 100 });
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(original.body);
+    expect(replay.headers['idempotency-status']).toBe('replayed');
+    expect(calls.create).toBe(1);
+  });
+
+  it('rejects an in-flight duplicate and replays only after completion', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    inFlight = {
+      entered,
+      release: new Promise<void>((resolve) => { release = resolve; }),
+    };
+    const send = () => request(app.getHttpServer())
+      .post('/fastify-payments')
+      .set('Idempotency-Key', 'fastify-concurrent')
+      .send({ amount: 777 })
+      .timeout({ deadline: 3000 });
+    const firstRequest = send().then((response) => response);
+    try {
+      await Promise.race([
+        waiting,
+        firstRequest.then(() => { throw new Error('Handler did not wait at the concurrency gate'); }),
+      ]);
+      const collision = await send();
+      expect(collision.status).toBe(409);
+      expect(collision.headers['idempotency-status']).toBe('conflict');
+      expect(calls.create).toBe(1);
+    } finally {
+      release();
+      inFlight = undefined;
+      await firstRequest;
+    }
+    const first = await firstRequest;
+    expect(first.status).toBe(201);
+    expect(first.body).toEqual({ id: 'fp_1', amount: 777 });
+    expect(first.headers['idempotency-status']).toBe('created');
+    const replay = await send();
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(first.body);
+    expect(replay.headers['idempotency-status']).toBe('replayed');
+    expect(calls.create).toBe(1);
   });
 
   it('does not conflate parameterized route targets with the same key and body', async () => {
@@ -165,6 +226,8 @@ describe('Idempotency Fastify adapter (e2e)', () => {
     expect(first.body).toEqual({ id: 'fp_header_1', amount: 250 });
     expect(first.headers.location).toBe('/fastify-payments/fp_header_1');
     expect(first.headers['x-request-id']).toBe('fastify_req_1');
+    expect(first.headers['set-cookie']).toEqual(['session=first-response-only; HttpOnly']);
+    expect(first.headers['private-trace']).toBe('first-response-only');
 
     const second = await request(app.getHttpServer())
       .post('/fastify-payments/headers')
@@ -175,6 +238,8 @@ describe('Idempotency Fastify adapter (e2e)', () => {
     expect(second.body).toEqual(first.body);
     expect(second.headers.location).toBe('/fastify-payments/fp_header_1');
     expect(second.headers['x-request-id']).toBe('fastify_req_1');
+    expect(second.headers['set-cookie']).toBeUndefined();
+    expect(second.headers['private-trace']).toBeUndefined();
     expect(calls.headers).toBe(1);
   });
 });

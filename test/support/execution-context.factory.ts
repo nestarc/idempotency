@@ -1,4 +1,5 @@
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
 import { Observable, of } from 'rxjs';
 
 export interface FakeRequest {
@@ -25,10 +26,7 @@ export const buildResponse = (
   initialHeaders: Record<string, string> = {},
 ): FakeResponse => {
   const headers = Object.fromEntries(
-    Object.entries(initialHeaders).map(([name, value]) => [
-      name.toLowerCase(),
-      value,
-    ]),
+    Object.entries(initialHeaders).map(([name, value]) => [name.toLowerCase(), value]),
   );
   const res: Partial<FakeResponse> = { statusCode: initialStatus };
   res.status = jest.fn((code: number): FakeResponse => {
@@ -58,24 +56,11 @@ export const buildExecutionContext = (params: {
   const handler = params.handler ?? (() => undefined);
   const controller = params.controller ?? class {};
 
-  const httpHost = {
-    getRequest: <T = FakeRequest>(): T => params.req as unknown as T,
-    getResponse: <T = FakeResponse>(): T => res as unknown as T,
-    getNext: <T = unknown>(): T => undefined as unknown as T,
-  };
-
-  const context: Partial<ExecutionContext> = {
-    switchToHttp: () => httpHost as any,
-    getHandler: () => handler as any,
-    getClass: () => controller as any,
-    getType: <T extends string = string>() => 'http' as T,
-    getArgs: <T extends any[] = any[]>() => [] as unknown as T,
-    getArgByIndex: <T = any>() => undefined as unknown as T,
-    switchToRpc: () => undefined as any,
-    switchToWs: () => undefined as any,
-  };
-
-  return { context: context as ExecutionContext, res };
+  // Use Nest's real context host so custom resolvers see the same arguments
+  // through getArgs/getArgByIndex and switchToHttp. The old handwritten host
+  // returned an empty argument list even when a request was available.
+  const context = new ExecutionContextHost([params.req, res, undefined], controller, handler);
+  return { context, res };
 };
 
 /**

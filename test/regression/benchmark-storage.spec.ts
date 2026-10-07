@@ -100,7 +100,7 @@ describe('benchmark resource isolation and failure cleanup', () => {
     );
     const config = mockPoolConstructor.mock.calls[0][0];
     const url = new URL(config.connectionString);
-    expect(url.searchParams.get('options')).toBe(`-c search_path=${namespace}`);
+    expect(url.searchParams.get('options')).toBe(`-c search_path=${namespace} -c lock_timeout=500`);
     expect(url.searchParams.get('query_timeout')).toBe('500');
     expect(url.searchParams.get('connectionTimeoutMillis')).toBe('500');
     expect(config).toMatchObject({ max: 1, connectionTimeoutMillis: 500, statement_timeout: 500 });

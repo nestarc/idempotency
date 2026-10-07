@@ -1,6 +1,7 @@
 import {
   captureReplayHeaders,
   replayStoredHeaders,
+  type HeaderReplayResponse,
 } from '../../src/utils/response-headers';
 
 describe('response header replay utilities', () => {
@@ -62,16 +63,9 @@ describe('response header replay utilities', () => {
     });
 
     it('returns undefined when disabled', () => {
-      expect(
-        captureReplayHeaders(
-          {
-            getHeaders: () => ({
-              'content-type': 'application/json',
-            }),
-          },
-          false,
-        ),
-      ).toBeUndefined();
+      const getHeaders = jest.fn(() => ({ 'content-type': 'application/json' }));
+      expect(captureReplayHeaders({ getHeaders }, false)).toBeUndefined();
+      expect(getHeaders).not.toHaveBeenCalled();
     });
 
     it('returns undefined when no headers match', () => {
@@ -123,6 +117,20 @@ describe('response header replay utilities', () => {
   });
 
   describe('replayStoredHeaders', () => {
+    it.each(['setHeader', 'header'] as const)(
+      'preserves the %s response receiver when applying headers',
+      (method) => {
+        const response: HeaderReplayResponse & { headers: Record<string, string> } = {
+          headers: {} as Record<string, string>,
+          [method](this: { headers: Record<string, string> }, name: string, value: string) {
+            this.headers[name] = value;
+          },
+        };
+        replayStoredHeaders(response, { Location: '/payments/pay-1', 'X-Result': 'created' });
+        expect(response.headers).toEqual({ location: '/payments/pay-1', 'x-result': 'created' });
+      },
+    );
+
     it('uses setHeader when available', () => {
       const setHeader = jest.fn();
       const header = jest.fn();
@@ -139,10 +147,7 @@ describe('response header replay utilities', () => {
       );
 
       expect(setHeader).toHaveBeenCalledTimes(2);
-      expect(setHeader).toHaveBeenCalledWith(
-        'content-type',
-        'application/json',
-      );
+      expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json');
       expect(setHeader).toHaveBeenCalledWith('location', '/orders/123');
       expect(header).not.toHaveBeenCalled();
     });
@@ -232,5 +237,27 @@ describe('response header replay utilities', () => {
       expect(setHeader).toHaveBeenCalledTimes(1);
       expect(setHeader).toHaveBeenCalledWith('location', '/orders/123');
     });
+  });
+
+  it.each([
+    'set-cookie',
+    'connection',
+    'transfer-encoding',
+    'keep-alive',
+    'upgrade',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'idempotency-status',
+    'idempotency-replayed',
+  ])('never captures or replays explicitly allowed %s', (name) => {
+    const stored = { [name.toUpperCase()]: 'must-not-replay', location: '/orders/123' };
+    expect(captureReplayHeaders({ getHeaders: () => stored }, [name, 'location'])).toEqual({
+      location: '/orders/123',
+    });
+    const setHeader = jest.fn();
+    replayStoredHeaders({ setHeader }, stored, [name, 'location']);
+    expect(setHeader.mock.calls).toEqual([['location', '/orders/123']]);
   });
 });

@@ -76,7 +76,7 @@ describe('REGRESSION: safe replay boundary', () => {
   });
 
   it('keeps fingerprint mismatch priority over an unreadable completed response', async () => {
-    const { storage, context } = harness();
+    const { storage, context, res } = harness();
     const interceptor = new IdempotencyInterceptor(new Reflector(), storage, {
       storage,
       scope: 'global',
@@ -90,10 +90,18 @@ describe('REGRESSION: safe replay boundary', () => {
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
     });
-    await expect(
-      firstValueFrom(interceptor.intercept(context, buildCallHandler())),
-    ).rejects.toMatchObject({ status: 422 });
+    const original = await storage.get(globalRequestKey('legacy'));
+    const next = buildCallHandler(of({ duplicate: true }));
+    await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toMatchObject({
+      status: 422,
+    });
+    expect(next.handleSpy).not.toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.getHeaders()).toEqual({ 'idempotency-status': 'mismatch' });
+    expect(storage.create).not.toHaveBeenCalled();
+    expect(storage.complete).not.toHaveBeenCalled();
     expect(storage.delete).not.toHaveBeenCalled();
+    expect(await storage.get(globalRequestKey('legacy'))).toEqual(original);
   });
 
   it('finds manual response metadata on an inherited, renamed handler property', async () => {

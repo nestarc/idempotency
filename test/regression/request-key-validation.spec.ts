@@ -16,6 +16,7 @@ import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { IDEMPOTENT_METADATA_KEY } from '../../src/idempotency.constants';
 import type { IdempotencyOptions } from '../../src/interfaces/idempotency-options.interface';
 import { FakeStorage } from '../support/fake-storage';
+import { MemoryStorage } from '../../src/storage/memory.storage';
 import {
   buildCallHandler,
   buildExecutionContext,
@@ -247,12 +248,44 @@ describe('REGRESSION: request key validation', () => {
     ['K', 'k'],
     ['é', 'e\u0301'],
     ['K', '"K"'],
-  ])('does not collapse %p and %p into one storage key', async (left, right) => {
-    const first = prepare({ key: left });
-    const second = prepare({ key: right });
-    await first.invoke();
-    await second.invoke();
-    expect(first.storage.get.mock.calls[0][0]).not.toBe(second.storage.get.mock.calls[0][0]);
+  ])('isolates %p and %p through actual persistence and replay', async (left, right) => {
+    const storage = new MemoryStorage();
+    const interceptor = new IdempotencyInterceptor(new Reflector(), storage, { storage });
+    const handler = () => undefined;
+    Reflect.defineMetadata(IDEMPOTENT_METADATA_KEY, { enabled: true }, handler);
+    const invoke = (key: string, value: string) => {
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          originalUrl: '/payments',
+          headers: { 'idempotency-key': key },
+          body: { amount: 100 },
+        },
+        handler,
+      });
+      const next = buildCallHandler(of({ operation: value }));
+      return { next, response: firstValueFrom(interceptor.intercept(context, next)) };
+    };
+    try {
+      for (const [key, value] of [
+        [left, 'left-operation'],
+        [right, 'right-operation'],
+      ]) {
+        const first = invoke(key, value);
+        await expect(first.response).resolves.toEqual({ operation: value });
+        expect(first.next.handleSpy).toHaveBeenCalledTimes(1);
+      }
+      for (const [key, value] of [
+        [right, 'right-operation'],
+        [left, 'left-operation'],
+      ]) {
+        const retry = invoke(key, 'duplicate');
+        await expect(retry.response).resolves.toEqual({ operation: value });
+        expect(retry.next.handleSpy).not.toHaveBeenCalled();
+      }
+    } finally {
+      await storage.onModuleDestroy();
+    }
   });
 
   describe('UTF-8 byte limits', () => {

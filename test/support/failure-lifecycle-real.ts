@@ -39,11 +39,39 @@ export function fixtureTables(namespace: string) {
 /** Both adapters use an independent PostgreSQL business ledger. */
 export async function connectFailureFixture(config: FailureChildConfig) {
   const tables = fixtureTables(config.namespace);
-  const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  if (
+    !process.env.TEST_DATABASE_URL ||
+    (config.backend === 'redis' && !process.env.TEST_REDIS_URL)
+  ) {
+    throw new Error('Real failure fixture requires explicit test storage URLs');
+  }
+  const pool = new Pool({
+    connectionString: process.env.TEST_DATABASE_URL,
+    connectionTimeoutMillis: 5_000,
+    query_timeout: 10_000,
+    statement_timeout: 10_000,
+  });
   const redis =
     config.backend === 'redis'
-      ? new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 })
+      ? new Redis(process.env.TEST_REDIS_URL!, {
+          lazyConnect: true,
+          connectTimeout: 5_000,
+          commandTimeout: 5_000,
+          maxRetriesPerRequest: 0,
+          retryStrategy: () => null,
+        })
       : undefined;
+  if (redis) {
+    // Observe failures via awaited commands; do not emit unhandled client errors.
+    redis.on('error', () => undefined);
+    try {
+      await redis.connect();
+    } catch (error) {
+      redis.disconnect();
+      await pool.end();
+      throw error;
+    }
+  }
   const storage: IdempotencyStorage = redis
     ? new RedisStorage({ client: redis, keyPrefix: `${config.namespace}:` })
     : new PostgresStorage({ pool, tableName: tables.records });
@@ -54,8 +82,12 @@ export async function connectFailureFixture(config: FailureChildConfig) {
     storage,
     tables,
     async close() {
-      if (redis) await redis.quit();
-      await pool.end();
+      try {
+        if (redis?.status === 'ready') await redis.quit();
+      } finally {
+        redis?.disconnect();
+        await pool.end();
+      }
     },
   };
 }

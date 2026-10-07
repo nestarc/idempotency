@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 
 import { PostgresStorage } from '../../src/storage/postgres.storage';
 import { describeStorageContract } from '../support/shared-storage-contract';
@@ -7,10 +8,9 @@ const DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
-// Per-spec table isolation: jest runs spec files in parallel, so every PG
-// spec uses its own table to avoid TRUNCATEs colliding across files. See
-// Task 16 of the v0.2.0 plan for the rationale.
-const TABLE_NAME = 'idempotency_records_contract';
+// A fresh namespace also isolates concurrent Jest processes and interrupted runs.
+// Keep the generated supporting index name below PostgreSQL's 63-byte limit.
+const TABLE_NAME = `idem_contract_${randomUUID().replace(/-/g, '')}`;
 
 if (!DATABASE_URL) {
   // eslint-disable-next-line no-console
@@ -25,13 +25,20 @@ describeOrSkip('PostgresStorage', () => {
   let suitePool: Pool;
 
   beforeAll(async () => {
-    suitePool = new Pool({ connectionString: DATABASE_URL });
+    suitePool = new Pool({
+      connectionString: DATABASE_URL,
+      connectionTimeoutMillis: 2000,
+      query_timeout: 3000,
+    });
     await PostgresStorage.createSchema(suitePool, TABLE_NAME);
   });
 
   afterAll(async () => {
-    await suitePool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
-    await suitePool.end();
+    try {
+      await suitePool?.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
+    } finally {
+      await suitePool?.end();
+    }
   });
 
   describeStorageContract('PostgresStorage', async () => {
@@ -58,13 +65,20 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: DATABASE_URL });
+    pool = new Pool({
+      connectionString: DATABASE_URL,
+      connectionTimeoutMillis: 2000,
+      query_timeout: 3000,
+    });
     await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
-    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
-    await pool.end();
+    try {
+      await pool?.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
+    } finally {
+      await pool?.end();
+    }
   });
 
   beforeEach(async () => {
@@ -102,16 +116,29 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
     const result = await pool.query<{ data_type: string }>(
       `SELECT data_type
          FROM information_schema.columns
-        WHERE table_name = $1 AND column_name = 'response_headers'`,
+        WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'response_headers'`,
       [TABLE_NAME],
     );
 
-    expect(result.rows[0].data_type).toBe('jsonb');
+    expect(result.rows).toEqual([{ data_type: 'jsonb' }]);
   });
 
-  it('createSchema() is idempotent — calling twice does not throw', async () => {
+  it('createSchema() preserves existing replay records and the unique key constraint', async () => {
+    const storage = new PostgresStorage({ pool, tableName: TABLE_NAME });
+    const { token } = await storage.create('schema-preserved', 'fp', 60);
+    await storage.complete('schema-preserved', token!, { statusCode: 201, body: 'original' }, 60);
+    const before = structuredClone(await storage.get('schema-preserved'));
+
     await PostgresStorage.createSchema(pool, TABLE_NAME);
-    await PostgresStorage.createSchema(pool, TABLE_NAME); // would throw on duplicate without IF NOT EXISTS
+    await PostgresStorage.createSchema(pool, TABLE_NAME);
+
+    expect(await storage.get('schema-preserved')).toEqual(before);
+    await expect(storage.create('schema-preserved', 'replacement', 60)).resolves.toEqual({
+      acquired: false,
+    });
+    const next = await storage.create('schema-new', 'new', 60);
+    expect(next.acquired).toBe(true);
+    expect((await storage.get('schema-new'))!.token).toBe(next.token);
   });
 
   it('createSchema() rejects unsafe table names', async () => {
@@ -121,7 +148,7 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
   });
 
   it('honors a custom tableName option (creates and uses an alternate table)', async () => {
-    const altTable = 'idempotency_alt';
+    const altTable = `idem_alt_${randomUUID().replace(/-/g, '')}`;
     await PostgresStorage.createSchema(pool, altTable);
     try {
       const storage = new PostgresStorage({ pool, tableName: altTable });
@@ -157,6 +184,15 @@ describeOrSkip('PostgresStorage — Postgres-specific behavior', () => {
         [TABLE_NAME],
       );
       expect(exists.rows[0].to_regclass).toBe(TABLE_NAME);
+      const { token } = await storage.create('auto-created', 'fp', 60);
+      await expect(
+        storage.complete('auto-created', token!, { statusCode: 201, body: 'usable' }, 60),
+      ).resolves.toBe('ok');
+      expect(await storage.get('auto-created')).toMatchObject({
+        token,
+        status: 'COMPLETED',
+        responseBody: 'usable',
+      });
     } finally {
       // Restore the suite's table even on assertion failure so the next test
       // (or the next jest run after a failed run) starts from a known state.

@@ -7,7 +7,7 @@ import {
   Logger,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { firstValueFrom, of, throwError } from 'rxjs';
+import { defer, firstValueFrom, of, throwError } from 'rxjs';
 import { createHash } from 'crypto';
 
 import { IdempotencyInterceptor } from '../src/idempotency.interceptor';
@@ -16,7 +16,10 @@ import { IDEMPOTENT_METADATA_KEY } from '../src/idempotency.constants';
 import { stableJsonStringify } from '../src/utils/stable-json';
 import { encodeReplayBody } from '../src/utils/replay-body';
 import { createRequestKey } from '../src/utils/request-key';
-import type { IdempotencyEvent, IdempotencyOptions } from '../src/interfaces/idempotency-options.interface';
+import type {
+  IdempotencyEvent,
+  IdempotencyOptions,
+} from '../src/interfaces/idempotency-options.interface';
 import type { IdempotentMetadata } from '../src/interfaces/idempotency-options.interface';
 
 import { FakeStorage } from './support/fake-storage';
@@ -28,7 +31,20 @@ import {
 } from './support/execution-context.factory';
 
 const sha256 = (input: unknown): string =>
-  createHash('sha256').update(stableJsonStringify(input ?? null)!).digest('hex');
+  createHash('sha256')
+    .update(stableJsonStringify(input ?? null)!)
+    .digest('hex');
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+};
+
+// Give asynchronous storage continuations a turn without guessing a duration.
+const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 /**
  * Convenience: build an interceptor wired to a fresh `FakeStorage` and the
@@ -53,7 +69,8 @@ const buildInterceptor = (overrides: Partial<IdempotencyOptions> = {}) => {
 };
 
 /**
- * Decorate a fresh handler function with `@Idempotent(options?)`.
+ * Attach chosen metadata to a fresh handler function. A separate test exercises
+ * the real @Idempotent decorator rather than this programmable fixture.
  *
  * Returns the handler so tests can pass it to `buildExecutionContext`.
  * Each call gets a unique handler so metadata from one test cannot leak
@@ -87,9 +104,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
 
       expect(storage.get).not.toHaveBeenCalled();
       expect(storage.create).not.toHaveBeenCalled();
@@ -231,9 +248,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler(of({ ok: true }));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
 
       expect(storage.get).not.toHaveBeenCalled();
       expect(storage.create).not.toHaveBeenCalled();
@@ -257,9 +274,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler(of({ ok: true }));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBe(resolverError);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBe(
+        resolverError,
+      );
 
       expect(storage.get).not.toHaveBeenCalled();
       expect(storage.create).not.toHaveBeenCalled();
@@ -274,6 +291,14 @@ describe('IdempotencyInterceptor', () => {
     // Case 4 — the all-important concatMap ordering test
     it('captures the response and completes BEFORE emitting to the caller', async () => {
       const { interceptor, storage } = buildInterceptor();
+      const completionStarted = deferred<void>();
+      const allowCompletion = deferred<void>();
+      const persist = storage.complete.getMockImplementation()!;
+      storage.complete.mockImplementationOnce(async (...args) => {
+        completionStarted.resolve();
+        await allowCompletion.promise;
+        return persist(...args);
+      });
       const handler = decoratedHandler({ enabled: true });
       const res = buildResponse(201);
       const body = { ok: true };
@@ -288,7 +313,28 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler(of(body));
 
-      const result = await firstValueFrom(interceptor.intercept(context, next));
+      const emitted: unknown[] = [];
+      const resultPromise = firstValueFrom(interceptor.intercept(context, next));
+      void resultPromise.then(
+        (value) => {
+          emitted.push(value);
+        },
+        () => undefined,
+      );
+
+      try {
+        // Unlike an immediate mock, this cannot mistake invoking complete()
+        // for awaiting its acknowledgement before publishing success.
+        await completionStarted.promise;
+        await nextTurn();
+        expect(emitted).toEqual([]);
+        expect(await storage.get(globalRequestKey('K1'))).toMatchObject({
+          status: 'PROCESSING',
+        });
+      } finally {
+        allowCompletion.resolve();
+      }
+      const result = await resultPromise;
 
       // Returned value is the unmodified handler result.
       expect(result).toBe(body);
@@ -301,19 +347,22 @@ describe('IdempotencyInterceptor', () => {
       );
       expect(storage.complete).toHaveBeenCalledWith(
         globalRequestKey('K1'),
-        expect.any(String), // token
-        { statusCode: 201, body: encodeReplayBody({ ok: true }) },
+        (await storage.create.mock.results[0].value).token,
+        {
+          statusCode: 201,
+          body: '@nestarc/idempotency:replay:v1:{"kind":"json","value":{"ok":true}}',
+        },
         86_400,
       );
 
-      // CRITICAL: complete must appear in the ledger BEFORE the outer observable
-      // is allowed to emit. The order is encoded in the ledger ops; if the
-      // implementation uses tap() (fire-and-forget) instead of concatMap(),
-      // the create→complete pair would race against the emission and the
-      // ledger order would be non-deterministic. firstValueFrom awaits the
-      // emission, so by the time we get here we know complete already ran.
-      const ops = storage.ledger.map((entry) => entry.op);
-      expect(ops).toEqual(['get', 'create', 'complete']);
+      expect(await storage.get(globalRequestKey('K1'))).toMatchObject({
+        status: 'COMPLETED',
+        statusCode: 201,
+      });
+      const retry = buildCallHandler(of({ duplicate: true }));
+      await expect(firstValueFrom(interceptor.intercept(context, retry))).resolves.toEqual(body);
+      expect(retry.handleSpy).not.toHaveBeenCalled();
+      expect(storage.complete).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -384,9 +433,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(ConflictException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        ConflictException,
+      );
 
       expect(next.handleSpy).not.toHaveBeenCalled();
     });
@@ -408,9 +457,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(ConflictException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        ConflictException,
+      );
 
       expect(next.handleSpy).not.toHaveBeenCalled();
     });
@@ -444,9 +493,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
 
       expect(next.handleSpy).not.toHaveBeenCalled();
     });
@@ -472,9 +521,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
     });
 
     // Case 10
@@ -597,9 +646,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler(of('NEVER'));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
 
       expect(next.handleSpy).not.toHaveBeenCalled();
     });
@@ -673,9 +722,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler(of({ ok: true }));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBe(resolverError);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBe(
+        resolverError,
+      );
 
       expect(storage.get).not.toHaveBeenCalled();
       expect(storage.create).not.toHaveBeenCalled();
@@ -702,15 +751,19 @@ describe('IdempotencyInterceptor', () => {
       const boom = new Error('boom');
       const next = buildCallHandler(throwError(() => boom));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBe(boom);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBe(boom);
 
       expect(storage.delete).toHaveBeenCalledWith(
         globalRequestKey('K1'),
-        expect.any(String),
+        (await storage.create.mock.results[0].value).token,
       );
       expect(storage.complete).not.toHaveBeenCalled();
+      expect(await storage.get(globalRequestKey('K1'))).toBeNull();
+      const retry = buildCallHandler(of({ retried: true }));
+      await expect(firstValueFrom(interceptor.intercept(context, retry))).resolves.toEqual({
+        retried: true,
+      });
+      expect(retry.handleSpy).toHaveBeenCalledTimes(1);
     });
 
     // Case 12
@@ -728,14 +781,9 @@ describe('IdempotencyInterceptor', () => {
       const httpErr = new HttpException('no', 409);
       const next = buildCallHandler(throwError(() => httpErr));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBe(httpErr);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBe(httpErr);
 
-      expect(storage.delete).toHaveBeenCalledWith(
-        globalRequestKey('K1'),
-        expect.any(String),
-      );
+      expect(storage.delete).toHaveBeenCalledWith(globalRequestKey('K1'), expect.any(String));
     });
   });
 
@@ -837,11 +885,7 @@ describe('IdempotencyInterceptor', () => {
 
       await firstValueFrom(interceptor.intercept(context, next));
 
-      expect(storage.create).toHaveBeenCalledWith(
-        globalRequestKey('K1'),
-        expect.any(String),
-        3600,
-      );
+      expect(storage.create).toHaveBeenCalledWith(globalRequestKey('K1'), expect.any(String), 3600);
       expect(storage.complete).toHaveBeenCalledWith(
         globalRequestKey('K1'),
         expect.any(String), // token
@@ -931,9 +975,9 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler(of({ ok: true }));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toThrow(/processingTtl must be a positive integer/i);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toThrow(
+        /processingTtl must be a positive integer/i,
+      );
 
       expect(storage.get).not.toHaveBeenCalled();
       expect(storage.create).not.toHaveBeenCalled();
@@ -951,12 +995,32 @@ describe('IdempotencyInterceptor', () => {
         },
         handler,
       });
-      // next.handle() always returns an Observable in real Nest, but the
-      // VALUE inside that observable can come from an awaited Promise.
-      // Simulate by emitting once with a resolved value.
-      const next = buildCallHandler(of({ fromPromise: true }));
-
-      const result = await firstValueFrom(interceptor.intercept(context, next));
+      const handlerStarted = deferred<void>();
+      const handlerResult = deferred<{ fromPromise: boolean }>();
+      // Nest flattens the handler promise into its response Observable.
+      const next = buildCallHandler(
+        defer(() => {
+          handlerStarted.resolve();
+          return handlerResult.promise;
+        }),
+      );
+      const response = firstValueFrom(interceptor.intercept(context, next));
+      try {
+        await handlerStarted.promise;
+        await nextTurn();
+        expect(storage.complete).not.toHaveBeenCalled();
+        expect(await storage.get(globalRequestKey('K1'))).toMatchObject({
+          status: 'PROCESSING',
+        });
+        const duplicate = buildCallHandler(of({ duplicate: true }));
+        await expect(
+          firstValueFrom(interceptor.intercept(context, duplicate)),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(duplicate.handleSpy).not.toHaveBeenCalled();
+      } finally {
+        handlerResult.resolve({ fromPromise: true });
+      }
+      const result = await response;
 
       expect(result).toEqual({ fromPromise: true });
       expect(storage.complete).toHaveBeenCalledWith(
@@ -1036,9 +1100,9 @@ describe('IdempotencyInterceptor', () => {
       );
 
       const retry = buildCallHandler(of('NEVER'));
-      await expect(
-        firstValueFrom(interceptor.intercept(context, retry)),
-      ).rejects.toBeInstanceOf(ConflictException);
+      await expect(firstValueFrom(interceptor.intercept(context, retry))).rejects.toBeInstanceOf(
+        ConflictException,
+      );
       expect(retry.handleSpy).not.toHaveBeenCalled();
       expect(next.handleSpy).toHaveBeenCalledTimes(1);
       expect(storage.create).toHaveBeenCalledTimes(1);
@@ -1124,16 +1188,11 @@ describe('IdempotencyInterceptor', () => {
       const boom = new Error('handler exploded');
       const next = buildCallHandler(throwError(() => boom));
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBe(boom);
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBe(boom);
 
       // delete was called and returned stale, but the error still propagates
       // without any additional exception being thrown.
-      expect(storage.delete).toHaveBeenCalledWith(
-        globalRequestKey('K1'),
-        expect.any(String),
-      );
+      expect(storage.delete).toHaveBeenCalledWith(globalRequestKey('K1'), expect.any(String));
     });
   });
 
@@ -1166,15 +1225,14 @@ describe('IdempotencyInterceptor', () => {
 
       await firstValueFrom(interceptor.intercept(context, next));
 
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'Idempotency-Status',
-        'created',
-      );
+      expect(res.setHeader).toHaveBeenCalledWith('Idempotency-Status', 'created');
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ outcome: 'created' });
       expect(events[0].keyHash).not.toBe('K-created');
       expect(events[0].keyHash).toMatch(/^[a-f0-9]{64}$/);
-      expect(events[0].namespace).toBe(createRequestKey(['global'], 'K-created').namespace);
+      expect(events[0].namespace).toBe(
+        '@nestarc/idempotency:namespace:v1:a8d13bfa12806deaf76cc6a84da9766e08aea45e65900b1d911f46f560a52b30',
+      );
       expect(events[0]).not.toHaveProperty('scope');
       expect(JSON.stringify(events)).not.toContain('K-created');
     });
@@ -1213,14 +1271,8 @@ describe('IdempotencyInterceptor', () => {
       const result = await firstValueFrom(interceptor.intercept(context, next));
 
       expect(result).toEqual({ ok: true });
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'Idempotency-Status',
-        'replayed',
-      );
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'Idempotency-Replayed',
-        'true',
-      );
+      expect(res.setHeader).toHaveBeenCalledWith('Idempotency-Status', 'replayed');
+      expect(res.setHeader).toHaveBeenCalledWith('Idempotency-Replayed', 'true');
       expect(events.map((event) => event.outcome)).toEqual(['replayed']);
     });
 
@@ -1253,14 +1305,11 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(ConflictException);
-
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'Idempotency-Status',
-        'conflict',
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        ConflictException,
       );
+
+      expect(res.setHeader).toHaveBeenCalledWith('Idempotency-Status', 'conflict');
       expect(events.map((event) => event.outcome)).toEqual(['conflict']);
     });
 
@@ -1295,14 +1344,11 @@ describe('IdempotencyInterceptor', () => {
       });
       const next = buildCallHandler();
 
-      await expect(
-        firstValueFrom(interceptor.intercept(context, next)),
-      ).rejects.toBeInstanceOf(UnprocessableEntityException);
-
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'Idempotency-Status',
-        'mismatch',
+      await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
       );
+
+      expect(res.setHeader).toHaveBeenCalledWith('Idempotency-Status', 'mismatch');
       expect(events.map((event) => event.outcome)).toEqual(['mismatch']);
     });
 
@@ -1459,10 +1505,8 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        createRequestKey(
-          ['endpoint', [], ['path', 'POST', '/orders/123/capture']],
-          'shared-key',
-        ).key,
+        createRequestKey(['endpoint', [], ['path', 'POST', '/orders/123/capture']], 'shared-key')
+          .key,
         expect.any(String),
         86_400,
       );
@@ -1486,10 +1530,7 @@ describe('IdempotencyInterceptor', () => {
         controller: PaymentsController,
       });
       await firstValueFrom(
-        interceptor.intercept(
-          firstCtx.context,
-          buildCallHandler(of({ id: 'cap_1' })),
-        ),
+        interceptor.intercept(firstCtx.context, buildCallHandler(of({ id: 'cap_1' }))),
       );
 
       const secondCtx = buildExecutionContext({
@@ -1503,25 +1544,16 @@ describe('IdempotencyInterceptor', () => {
         controller: PaymentsController,
       });
       const secondResult = await firstValueFrom(
-        interceptor.intercept(
-          secondCtx.context,
-          buildCallHandler(of({ id: 'cap_2' })),
-        ),
+        interceptor.intercept(secondCtx.context, buildCallHandler(of({ id: 'cap_2' }))),
       );
 
       expect(secondResult).toEqual({ id: 'cap_2' });
       const createCalls = storage.create.mock.calls.map(([key]) => key);
       expect(createCalls).toContain(
-        createRequestKey(
-          ['endpoint', [], ['path', 'POST', '/orders/1/capture']],
-          'shared-key',
-        ).key,
+        createRequestKey(['endpoint', [], ['path', 'POST', '/orders/1/capture']], 'shared-key').key,
       );
       expect(createCalls).toContain(
-        createRequestKey(
-          ['endpoint', [], ['path', 'POST', '/orders/2/capture']],
-          'shared-key',
-        ).key,
+        createRequestKey(['endpoint', [], ['path', 'POST', '/orders/2/capture']], 'shared-key').key,
       );
     });
 
@@ -1540,10 +1572,7 @@ describe('IdempotencyInterceptor', () => {
         controller: PaymentsController,
       });
       await firstValueFrom(
-        interceptor.intercept(
-          firstCtx.context,
-          buildCallHandler(of({ result: 'first' })),
-        ),
+        interceptor.intercept(firstCtx.context, buildCallHandler(of({ result: 'first' }))),
       );
 
       const secondCtx = buildExecutionContext({
@@ -1557,19 +1586,13 @@ describe('IdempotencyInterceptor', () => {
         controller: PaymentsController,
       });
       const secondResult = await firstValueFrom(
-        interceptor.intercept(
-          secondCtx.context,
-          buildCallHandler(of({ result: 'second' })),
-        ),
+        interceptor.intercept(secondCtx.context, buildCallHandler(of({ result: 'second' }))),
       );
 
       expect(secondResult).toEqual({ result: 'first' });
       expect(storage.create).toHaveBeenCalledTimes(1);
       expect(storage.create).toHaveBeenCalledWith(
-        createRequestKey(
-          ['endpoint', [], ['path', 'POST', '/search']],
-          'query-key',
-        ).key,
+        createRequestKey(['endpoint', [], ['path', 'POST', '/search']], 'query-key').key,
         expect.any(String),
         86_400,
       );
@@ -1609,10 +1632,7 @@ describe('IdempotencyInterceptor', () => {
         controller: RefundsController,
       });
       const refundResult = await firstValueFrom(
-        interceptor.intercept(
-          refundCtx.context,
-          buildCallHandler(of({ kind: 'refund' })),
-        ),
+        interceptor.intercept(refundCtx.context, buildCallHandler(of({ kind: 'refund' }))),
       );
 
       // The refund call returned the refund handler's own response, NOT a
@@ -1623,21 +1643,13 @@ describe('IdempotencyInterceptor', () => {
       const createCalls = storage.create.mock.calls.map(([key]) => key);
       expect(createCalls).toContain(
         createRequestKey(
-          [
-            'endpoint',
-            [],
-            ['handler', 'POST', 'PaymentsController', 'createHandler'],
-          ],
+          ['endpoint', [], ['handler', 'POST', 'PaymentsController', 'createHandler']],
           'shared-key',
         ).key,
       );
       expect(createCalls).toContain(
         createRequestKey(
-          [
-            'endpoint',
-            [],
-            ['handler', 'POST', 'RefundsController', 'refundHandler'],
-          ],
+          ['endpoint', [], ['handler', 'POST', 'RefundsController', 'refundHandler']],
           'shared-key',
         ).key,
       );
@@ -1663,10 +1675,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        createRequestKey(
-          ['endpoint', ['tenant-42'], ['path', 'POST', '/payments']],
-          'K1',
-        ).key,
+        createRequestKey(['endpoint', ['tenant-42'], ['path', 'POST', '/payments']], 'K1').key,
         expect.any(String),
         86_400,
       );
@@ -1737,9 +1746,7 @@ describe('IdempotencyInterceptor', () => {
         },
         86_400,
       );
-      expect(storage.complete.mock.calls[0][2].headers).not.toHaveProperty(
-        'set-cookie',
-      );
+      expect(storage.complete.mock.calls[0][2].headers).not.toHaveProperty('set-cookie');
     });
 
     it('replays stored headers and status for completed records', async () => {
@@ -1775,10 +1782,7 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toEqual({ id: 'pay_1' });
       expect(res.status).toHaveBeenCalledWith(201);
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'location',
-        '/payments/pay_1',
-      );
+      expect(res.setHeader).toHaveBeenCalledWith('location', '/payments/pay_1');
       expect(res.setHeader).toHaveBeenCalledWith('x-request-id', 'req_1');
       expect(next.handleSpy).not.toHaveBeenCalled();
     });
@@ -1894,22 +1898,10 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toEqual({ id: 'pay_1' });
       expect(res.setHeader).toHaveBeenCalledTimes(1);
-      expect(res.setHeader).toHaveBeenCalledWith(
-        'location',
-        '/payments/pay_1',
-      );
-      expect(res.setHeader).not.toHaveBeenCalledWith(
-        'x-request-id',
-        expect.any(String),
-      );
-      expect(res.setHeader).not.toHaveBeenCalledWith(
-        'etag',
-        expect.any(String),
-      );
-      expect(res.setHeader).not.toHaveBeenCalledWith(
-        'set-cookie',
-        expect.any(String),
-      );
+      expect(res.setHeader).toHaveBeenCalledWith('location', '/payments/pay_1');
+      expect(res.setHeader).not.toHaveBeenCalledWith('x-request-id', expect.any(String));
+      expect(res.setHeader).not.toHaveBeenCalledWith('etag', expect.any(String));
+      expect(res.setHeader).not.toHaveBeenCalledWith('set-cookie', expect.any(String));
     });
   });
 
@@ -1958,13 +1950,9 @@ describe('IdempotencyInterceptor', () => {
         });
         const original = build();
         const next = buildCallHandler(of(original));
-        const warnSpy = jest
-          .spyOn(Logger.prototype, 'warn')
-          .mockImplementation();
+        const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
 
-        const result = await firstValueFrom(
-          interceptor.intercept(context, next),
-        );
+        const result = await firstValueFrom(interceptor.intercept(context, next));
 
         // The caller receives the original value unchanged.
         expect(result).toBe(original);
@@ -1982,9 +1970,9 @@ describe('IdempotencyInterceptor', () => {
         );
 
         const retry = buildCallHandler(of('NEVER'));
-        await expect(
-          firstValueFrom(interceptor.intercept(context, retry)),
-        ).rejects.toBeInstanceOf(ConflictException);
+        await expect(firstValueFrom(interceptor.intercept(context, retry))).rejects.toBeInstanceOf(
+          ConflictException,
+        );
         expect(retry.handleSpy).not.toHaveBeenCalled();
         expect(next.handleSpy).toHaveBeenCalledTimes(1);
         expect(storage.create).toHaveBeenCalledTimes(1);

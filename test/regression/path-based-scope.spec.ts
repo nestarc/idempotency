@@ -18,12 +18,7 @@
  * when available, then route metadata, then handler identity.
  */
 import 'reflect-metadata';
-import {
-  Controller,
-  Post,
-  UseInterceptors,
-  type INestApplication,
-} from '@nestjs/common';
+import { Controller, Post, UseInterceptors, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
@@ -31,7 +26,6 @@ import { IdempotencyModule } from '../../src/idempotency.module';
 import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { Idempotent } from '../../src/idempotency.decorator';
 import { MemoryStorage } from '../../src/storage/memory.storage';
-import { createRequestKey } from '../../src/utils/request-key';
 import type { CreateResult } from '../../src/interfaces/idempotency-storage.interface';
 
 /**
@@ -58,9 +52,8 @@ class TrackingMemoryStorage extends MemoryStorage {
  * these would have collided under scope='endpoint' because their class
  * names are identical; the route paths are different.
  *
- * We cannot actually declare the same class name twice in one file, so
- * we use two wrapper namespaces to simulate the condition and rely on
- * the runtime metadata stamping via decorators.
+ * Their runtime constructor names are deliberately identical below. Distinct
+ * TypeScript variable names alone would not reproduce the original collision.
  */
 
 // v1/users controller
@@ -91,6 +84,11 @@ class V2UsersController {
   }
 }
 
+// Nest resolves controllers by their constructor objects, so distinct tokens
+// can still carry the identical class/handler names used by the old scope.
+Object.defineProperty(V1UsersController, 'name', { value: 'UsersController' });
+Object.defineProperty(V2UsersController, 'name', { value: 'UsersController' });
+
 describe('REGRESSION: route-path-based scope (cross-module isolation)', () => {
   let app: INestApplication;
   let storage: TrackingMemoryStorage;
@@ -98,25 +96,28 @@ describe('REGRESSION: route-path-based scope (cross-module isolation)', () => {
   beforeAll(async () => {
     storage = new TrackingMemoryStorage();
     const mod = await Test.createTestingModule({
-      imports: [
-        IdempotencyModule.forRoot({ storage, scope: 'endpoint' }),
-      ],
+      imports: [IdempotencyModule.forRoot({ storage, scope: 'endpoint' })],
       controllers: [V1UsersController, V2UsersController],
     }).compile();
     app = mod.createNestApplication();
-    await app.init();
+    await app.listen(0, '127.0.0.1');
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await storage.onModuleDestroy();
+    storage.capturedKeys.length = 0;
     V1UsersController.calls = 0;
     V2UsersController.calls = 0;
   });
 
   it('v1 and v2 controllers do not collide when they share an Idempotency-Key', async () => {
+    expect(V1UsersController.name).toBe(V2UsersController.name);
+    expect(V1UsersController.prototype.create.name).toBe(V2UsersController.prototype.create.name);
+
     const v1 = await request(app.getHttpServer())
       .post('/v1/users')
       .set('Idempotency-Key', 'shared')
@@ -131,28 +132,39 @@ describe('REGRESSION: route-path-based scope (cross-module isolation)', () => {
     expect(v2.status).toBe(201);
     expect(v2.body).toEqual({ version: 'v2', id: 'u1' });
 
-    // Both handlers ran exactly once.
+    for (const [route, expected] of [
+      ['/v1/users', { version: 'v1', id: 'u1' }],
+      ['/v2/users', { version: 'v2', id: 'u1' }],
+    ] as const) {
+      const replay = await request(app.getHttpServer())
+        .post(route)
+        .set('Idempotency-Key', 'shared')
+        .send({ name: 'Alice' });
+      expect(replay.status).toBe(201);
+      expect(replay.body).toEqual(expected);
+      expect(replay.headers['idempotency-status']).toBe('replayed');
+    }
+    expect(storage.capturedKeys).toHaveLength(2);
+    expect(new Set(storage.capturedKeys).size).toBe(2);
+
+    // Both handlers ran exactly once, including after each endpoint's retry.
     expect(V1UsersController.calls).toBe(1);
     expect(V2UsersController.calls).toBe(1);
   });
 
-  it('encodes the HTTP method and actual route path in the storage key', async () => {
-    const before = storage.capturedKeys.length;
-
-    await request(app.getHttpServer())
+  it('keeps raw client keys and controller names out of persisted addresses', async () => {
+    const response = await request(app.getHttpServer())
       .post('/v1/users')
       .set('Idempotency-Key', 'probe-key')
       .send({ name: 'Bob' });
 
-    expect(storage.capturedKeys.length).toBeGreaterThan(before);
-    const scopedKey = storage.capturedKeys[storage.capturedKeys.length - 1];
-    expect(scopedKey).toBe(
-      createRequestKey(
-        ['endpoint', [], ['path', 'POST', '/v1/users']],
-        'probe-key',
-      ).key,
-    );
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ version: 'v1', id: 'u1' });
+    expect(storage.capturedKeys).toHaveLength(1);
+    const [scopedKey] = storage.capturedKeys;
     expect(scopedKey).not.toContain('probe-key');
-    expect(scopedKey).not.toContain('V1UsersController');
+    expect(scopedKey).not.toContain('UsersController');
+    expect(scopedKey).not.toContain('/v1/users');
+    expect(await storage.get(scopedKey)).toMatchObject({ status: 'COMPLETED' });
   });
 });

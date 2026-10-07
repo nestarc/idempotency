@@ -43,7 +43,7 @@ const buildInterceptor = (moduleTtl?: number) => {
     scope: 'global',
     ...(moduleTtl !== undefined ? { ttl: moduleTtl } : {}),
   };
-  return new IdempotencyInterceptor(new Reflector(), storage, options);
+  return { interceptor: new IdempotencyInterceptor(new Reflector(), storage, options), storage };
 };
 
 describe('REGRESSION: TTL validation', () => {
@@ -57,7 +57,7 @@ describe('REGRESSION: TTL validation', () => {
 
   for (const { name, ttl } of invalidCases) {
     it(`rejects ${name} (${ttl}) TTL at the module level`, async () => {
-      const interceptor = buildInterceptor(ttl);
+      const { interceptor, storage } = buildInterceptor(ttl);
       const handler = decoratedHandler();
       const { context } = buildExecutionContext({
         req: {
@@ -72,10 +72,12 @@ describe('REGRESSION: TTL validation', () => {
       await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toThrow(
         /ttl must be a positive integer/i,
       );
+      expect(storage.ledger).toEqual([]);
+      expect(next.handleSpy).not.toHaveBeenCalled();
     });
 
     it(`rejects ${name} (${ttl}) TTL at the decorator level`, async () => {
-      const interceptor = buildInterceptor(60); // valid at module level
+      const { interceptor, storage } = buildInterceptor(60); // valid at module level
       const handler = decoratedHandler(ttl);
       const { context } = buildExecutionContext({
         req: {
@@ -90,11 +92,13 @@ describe('REGRESSION: TTL validation', () => {
       await expect(firstValueFrom(interceptor.intercept(context, next))).rejects.toThrow(
         /ttl must be a positive integer/i,
       );
+      expect(storage.ledger).toEqual([]);
+      expect(next.handleSpy).not.toHaveBeenCalled();
     });
   }
 
   it('accepts a valid positive-integer TTL', async () => {
-    const interceptor = buildInterceptor(60);
+    const { interceptor, storage } = buildInterceptor(60);
     const handler = decoratedHandler();
     const { context } = buildExecutionContext({
       req: {
@@ -109,6 +113,9 @@ describe('REGRESSION: TTL validation', () => {
     await expect(firstValueFrom(interceptor.intercept(context, next))).resolves.toEqual({
       ok: true,
     });
+    expect(next.handleSpy).toHaveBeenCalledTimes(1);
+    expect(storage.create).toHaveBeenCalledTimes(1);
+    expect(storage.complete).toHaveBeenCalledTimes(1);
   });
 });
 

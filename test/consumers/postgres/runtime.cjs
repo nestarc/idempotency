@@ -6,6 +6,7 @@ const { PostgresStorage, PostgresSweepService } = require('@nestarc/idempotency/
 const { Pool } = require('pg');
 const { assertAbsent, assertPublicPaths, bootAndSmoke, run } = require('./common/runtime.cjs');
 const { runPostgresExamples } = require('./compiled/examples');
+const { verifyHttpStorageContract } = require('./compiled/common/http-contract');
 
 run(async () => {
   assertAbsent('ioredis');
@@ -24,12 +25,14 @@ run(async () => {
   const pool = new Pool({
     connectionString: process.env.TEST_DATABASE_URL,
     connectionTimeoutMillis: 5000,
+    query_timeout: 5000,
     max: 1,
   });
   const tableName = `consumer_${randomUUID().replaceAll('-', '')}`;
   try {
     const storage = new PostgresStorage({ pool, tableName, autoCreateSchema: true });
     await bootAndSmoke(storage, 'postgres');
+    await verifyHttpStorageContract(storage, 'postgres');
     await runPostgresExamples(pool, tableName, process.env.TEST_DATABASE_URL);
   } finally {
     try {

@@ -189,7 +189,12 @@ async function createPostgres(
       throw new Error('Invalid Postgres URL');
     // pg lets connection-string parameters override Pool options. The startup
     // search_path applies to every connection and has no public fallback.
-    url.searchParams.set('options', `-c search_path=${namespace}`);
+    // Startup options work with the minimum pg 8.11 driver/types as well;
+    // lock_timeout was not exposed by that version's PoolConfig.
+    url.searchParams.set(
+      'options',
+      `-c search_path=${namespace} -c lock_timeout=${options.requestTimeoutMs}`,
+    );
     for (const key of [
       'statement_timeout',
       'query_timeout',
@@ -207,7 +212,6 @@ async function createPostgres(
       idleTimeoutMillis: options.requestTimeoutMs,
       statement_timeout: options.requestTimeoutMs,
       query_timeout: options.requestTimeoutMs,
-      lock_timeout: options.requestTimeoutMs,
       application_name: 'idempotency-benchmark',
     });
     pool.on('error', () => undefined);

@@ -23,7 +23,7 @@ describe('RedisStorage lifecycle', () => {
   it('closes the internally-owned client via OnModuleDestroy when the Nest app shuts down', async () => {
     // We use a spy factory that returns a mock client whose `quit` method is
     // a jest.fn so we can assert on call count after shutdown.
-    const mockClient = new (RedisMock as any)() as Redis;
+    const mockClient = new RedisMock() as unknown as Redis;
     const quitSpy = jest.spyOn(mockClient, 'quit');
 
     @Module({
@@ -53,7 +53,7 @@ describe('RedisStorage lifecycle', () => {
   it('does NOT close a consumer-supplied client on shutdown', async () => {
     // When the consumer passes their own client, RedisStorage must NOT
     // touch its lifecycle — the consumer retains ownership.
-    const mockClient = new (RedisMock as any)() as Redis;
+    const mockClient = new RedisMock() as unknown as Redis;
     const quitSpy = jest.spyOn(mockClient, 'quit');
 
     @Module({
@@ -90,8 +90,11 @@ describe('RedisStorage lifecycle', () => {
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     const app = mod.createNestApplication();
     await app.init();
+    const { token } = await storage.create('shutdown-record', 'fp', 60);
+    expect((await storage.get('shutdown-record'))!.token).toBe(token);
     await app.close();
 
     expect(destroySpy).toHaveBeenCalledTimes(1);
+    await expect(storage.get('shutdown-record')).resolves.toBeNull();
   });
 });

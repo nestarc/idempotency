@@ -91,6 +91,7 @@ it('demonstrates why an S1 body and v1-looking legacy raw key do not prove recor
       { statusCode: 201, body: encodeReplayBody({ owner: 'old-global-caller' }) },
       60,
     );
+    const original = await shared.get(address);
     const business = jest.fn(async () => ({ owner }));
     const unsafe = invokeCurrent(shared, command, 100, business);
     await expect(unsafe.result).resolves.toEqual({ owner: 'old-global-caller' });
@@ -98,8 +99,11 @@ it('demonstrates why an S1 body and v1-looking legacy raw key do not prove recor
 
     const isolated = invokeCurrent(fresh, command, 100, business);
     await expect(isolated.result).resolves.toEqual({ owner });
+    const retry = invokeCurrent(fresh, command, 100, business);
+    await expect(retry.result).resolves.toEqual({ owner });
+    expect(retry.handler).not.toHaveBeenCalled();
     expect(business).toHaveBeenCalledTimes(1);
-    expect(await shared.get(address)).not.toBeNull();
+    expect(await shared.get(address)).toEqual(original);
   } finally {
     await shared.onModuleDestroy();
     await fresh.onModuleDestroy();
@@ -229,7 +233,23 @@ describeReal('S7 migration and rollback with a durable PostgreSQL business ledge
     ]);
     // Cache namespaces do not carry the parameter checks across versions;
     // the business ledger must reject an altered command even on a cache miss.
-    await expect(createOrder('before-upgrade', 999)).rejects.toThrow('business command mismatch');
+    // The rollback table has only old-format addresses, so this current-format
+    // request really misses its cache and reaches the durable business check.
+    const altered = invokeCurrent(rollback, 'before-upgrade', 999, () =>
+      createOrder('before-upgrade', 999),
+    );
+    await expect(altered.result).rejects.toThrow('business command mismatch');
+    expect(altered.handler).toHaveBeenCalledTimes(1);
+    const afterMismatch = await pool.query<{ command_id: string; count: number }>(
+      `SELECT command_id, count(*)::int AS count FROM "${effects}"
+       GROUP BY command_id ORDER BY command_id`,
+    );
+    expect(afterMismatch.rows).toEqual(counts.rows);
+    const saved = await pool.query<{ amount: number; result: unknown }>(
+      `SELECT amount, result FROM "${ledger}" WHERE owner = $1 AND command_id = $2`,
+      [owner, 'before-upgrade'],
+    );
+    expect(saved.rows).toEqual([{ amount: 100, result: first }]);
   });
 
   it('keeps new replay bodies unreadable to the modeled 0.4 JSON reader', async () => {

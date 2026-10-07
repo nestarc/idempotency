@@ -43,10 +43,11 @@ export type StorageFactory = () => Promise<StorageHarness>;
 export const describeStorageContract = (name: string, factory: StorageFactory): void => {
   describe(`${name} (shared contract)`, () => {
     let storage: IdempotencyStorage;
-    let cleanup: () => Promise<void>;
+    let cleanup: (() => Promise<void>) | undefined;
     let expire: StorageHarness['expire'];
 
     beforeEach(async () => {
+      cleanup = undefined;
       const harness = await factory();
       storage = harness.storage;
       cleanup = harness.cleanup;
@@ -54,7 +55,7 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
     });
 
     afterEach(async () => {
-      await cleanup();
+      await cleanup?.();
     });
 
     it('get() on a missing key returns null', async () => {
@@ -246,7 +247,7 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
           60,
         ),
       ).resolves.toBe('ok');
-      const first = await storage.get('contract-repeat');
+      const first = structuredClone(await storage.get('contract-repeat'));
       await expect(
         storage.complete(
           'contract-repeat',
@@ -323,7 +324,7 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
         const replacement = await storage.create('contract-replace', 'new', 120);
         expect(replacement.acquired).toBe(true);
         expect(replacement.token).not.toBe(old.token);
-        const before = await storage.get('contract-replace');
+        const before = structuredClone(await storage.get('contract-replace'));
         expect(before!.status).toBe('PROCESSING');
         expect(before!.responseBody).toBeUndefined();
         await expect(
@@ -398,6 +399,7 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
       'complete() with nonmatching token %s returns "stale" and does not mutate',
       async (wrongToken) => {
         await storage.create('contract-4', 'fp', 60);
+        const before = structuredClone(await storage.get('contract-4'));
         const result = await storage.complete(
           'contract-4',
           wrongToken,
@@ -406,9 +408,7 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
         );
         expect(result).toBe('stale');
 
-        const record = await storage.get('contract-4');
-        expect(record!.status).toBe('PROCESSING');
-        expect(record!.responseBody).toBeUndefined();
+        expect(await storage.get('contract-4')).toEqual(before);
       },
     );
 
@@ -448,11 +448,64 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
       'delete() with nonmatching token %s returns "stale" and leaves the record intact',
       async (wrongToken) => {
         await storage.create('contract-8', 'fp', 60);
+        const before = structuredClone(await storage.get('contract-8'));
         const result = await storage.delete('contract-8', wrongToken);
         expect(result).toBe('stale');
-        await expect(storage.get('contract-8')).resolves.not.toBeNull();
+        expect(await storage.get('contract-8')).toEqual(before);
       },
     );
+
+    it('a completed record blocks a new owner without changing its replay or retention', async () => {
+      const { token } = await storage.create('contract-completed-nx', undefined, 60);
+      await expect(
+        storage.complete(
+          'contract-completed-nx',
+          token!,
+          {
+            statusCode: 204,
+            body: '',
+            headers: { 'x-replay': 'original' },
+          },
+          120,
+        ),
+      ).resolves.toBe('ok');
+      const before = structuredClone(await storage.get('contract-completed-nx'));
+      expect(before!.fingerprint).toBeUndefined();
+      expect(before!.responseBody).toBe('');
+
+      await expect(storage.create('contract-completed-nx', 'replacement', 3600)).resolves.toEqual({
+        acquired: false,
+      });
+      await expect(
+        storage.delete('contract-completed-nx', '00000000-0000-4000-8000-000000000000'),
+      ).resolves.toBe('stale');
+      expect(await storage.get('contract-completed-nx')).toEqual(before);
+      await expect(storage.delete('contract-completed-nx', token!)).resolves.toBe('ok');
+      await expect(storage.get('contract-completed-nx')).resolves.toBeNull();
+    });
+
+    it('a valid owner token for a different key cannot complete or delete this lease', async () => {
+      const first = await storage.create('contract-owner-a', 'a', 60);
+      const second = await storage.create('contract-owner-b', 'b', 60);
+      expect(first.token).not.toBe(second.token);
+      const beforeA = structuredClone(await storage.get('contract-owner-a'));
+      const beforeB = structuredClone(await storage.get('contract-owner-b'));
+
+      await expect(
+        storage.complete(
+          'contract-owner-b',
+          first.token!,
+          {
+            statusCode: 201,
+            body: 'wrong owner',
+          },
+          3600,
+        ),
+      ).resolves.toBe('stale');
+      await expect(storage.delete('contract-owner-b', first.token!)).resolves.toBe('stale');
+      expect(await storage.get('contract-owner-a')).toEqual(beforeA);
+      expect(await storage.get('contract-owner-b')).toEqual(beforeB);
+    });
 
     it('delete() on a missing key returns "ok" (idempotent cleanup)', async () => {
       const result = await storage.delete('contract-missing', 'any-token');

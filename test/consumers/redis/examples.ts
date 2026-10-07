@@ -34,6 +34,7 @@ async function verifyOwnedRedisConnection(
             connection: {
               lazyConnect: true,
               connectTimeout: 5000,
+              commandTimeout: 5000,
               maxRetriesPerRequest: 1,
               retryStrategy: () => null,
             },
@@ -61,7 +62,8 @@ async function verifyOwnedRedisConnection(
     assert.equal(record.acquired, true);
     assert.equal((await storage.get('owned-command'))?.status, 'PROCESSING');
     assert.ok(record.token);
-    await storage.delete('owned-command', record.token);
+    assert.equal(await storage.delete('owned-command', record.token), 'ok');
+    assert.equal(await storage.get('owned-command'), null);
     const ended = once(owned, 'end', { signal: AbortSignal.timeout(5000) });
     await module.close();
     closed = true;

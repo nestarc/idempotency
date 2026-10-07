@@ -6,10 +6,10 @@ import { describeStorageContract } from '../support/shared-storage-contract';
 
 const buildClient = () => new RedisMock() as unknown as Redis;
 
-// Plug RedisStorage into the shared behavioral contract suite. Each test
-// gets a fresh mock client and the storage is torn down via onModuleDestroy
-// (which delegates to close()).
-describeStorageContract('RedisStorage', async () => {
+// This executes the production adapter and Lua in ioredis-mock, a fast emulator.
+// Server atomicity and expiry are established separately in redis.storage.real.spec.ts.
+// These injected clients remain test-owned and cleanup closes them explicitly.
+describeStorageContract('RedisStorage (Lua emulator)', async () => {
   const client = buildClient();
   await client.flushall();
   const storage = new RedisStorage({ client });
@@ -54,13 +54,13 @@ describe('RedisStorage', () => {
       expect(result.acquired).toBe(true);
       expect(result.token).toMatch(/^[0-9a-f-]{36}$/i);
 
-      const hash = await (client as any).hgetall('idempotency:K1');
+      const hash = await client.hgetall('idempotency:K1');
       expect(hash.token).toBe(result.token);
       const payload = JSON.parse(hash.payload);
       expect(payload.status).toBe('PROCESSING');
       expect(payload.fingerprint).toBe('fp');
 
-      const ttl = await (client as any).ttl('idempotency:K1');
+      const ttl = await client.ttl('idempotency:K1');
       expect(ttl).toBeGreaterThan(0);
       expect(ttl).toBeLessThanOrEqual(10);
     });
@@ -103,7 +103,7 @@ describe('RedisStorage', () => {
       expect(typeof record!.statusCode).toBe('number');
       expect(record!.responseBody).toBe('{"id":"abc"}');
 
-      const ttl = await (client as any).ttl('idempotency:K1');
+      const ttl = await client.ttl('idempotency:K1');
       expect(ttl).toBeGreaterThan(60);
       expect(ttl).toBeLessThanOrEqual(3600);
     });
@@ -183,7 +183,7 @@ describe('RedisStorage', () => {
         keyPrefix: 'myapp:idem:',
       });
       await customStorage.create('K1', 'fp', 10);
-      const hash = await (client as any).hgetall('myapp:idem:K1');
+      const hash = await client.hgetall('myapp:idem:K1');
       expect(hash.token).toBeTruthy();
     });
   });
@@ -192,13 +192,20 @@ describe('RedisStorage', () => {
     it('builds an internal Redis client from a connection options object', async () => {
       const storage2 = new RedisStorage({
         connection: { host: 'localhost', port: 6379 },
-        // ioredis-mock's type signature doesn't accept connection options,
-        // but the runtime constructor does. The cast is test-only.
-        clientFactory: () => new (RedisMock as any)() as Redis,
+        clientFactory: () => buildClient(),
       });
       const result = await storage2.create('Kx', 'fp', 10);
       expect(result.acquired).toBe(true);
-      await storage2.close();
+      try {
+        const record = await storage2.get('Kx');
+        expect(record).toMatchObject({
+          token: result.token,
+          fingerprint: 'fp',
+          status: 'PROCESSING',
+        });
+      } finally {
+        await storage2.close();
+      }
     });
   });
 });

@@ -1,7 +1,11 @@
 import { createRequestKey, type RequestNamespace } from '../../src/utils/request-key';
+import { globalRequestKey } from '../support/request-key';
 
 describe('versioned request key format', () => {
   it('pins the v1 storage and namespace encoding for existing records', () => {
+    expect(globalRequestKey('K')).toBe(
+      '@nestarc/idempotency:key:v1:c6a914c4bef8f2dde13ea073bbc5a60e31e14f51b0e36a96fbcbe066e056b615',
+    );
     expect(createRequestKey(['global'], 'K')).toEqual({
       key: '@nestarc/idempotency:key:v1:c6a914c4bef8f2dde13ea073bbc5a60e31e14f51b0e36a96fbcbe066e056b615',
       namespace:
@@ -40,5 +44,19 @@ describe('versioned request key format', () => {
       'K',
     );
     expect(Buffer.byteLength(key, 'utf8')).toBe(92);
+  });
+
+  it('preserves component boundaries that delimiter concatenation would collide', () => {
+    const endpoint = ['path', 'POST', '/payments'] as const;
+    const identities: readonly string[][] = [['tenant:a', 'b'], ['tenant', 'a:b'], ['tenant:a:b']];
+    const keys = identities.map(
+      (identity) => createRequestKey(['endpoint', identity, endpoint], 'key').key,
+    );
+    expect(new Set(keys).size).toBe(identities.length);
+    expect(
+      createRequestKey(['endpoint', ['tenant'], ['path', 'POST', '/a:key']], 'suffix').key,
+    ).not.toBe(
+      createRequestKey(['endpoint', ['tenant'], ['path', 'POST', '/a']], 'key:suffix').key,
+    );
   });
 });

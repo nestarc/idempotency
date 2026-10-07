@@ -1,81 +1,82 @@
 /**
- * Lifecycle parity with RedisStorage:
- *  1. PostgresStorage implements OnModuleDestroy.
- *  2. When the storage owns its pool (constructed via `connection` /
- *     `poolFactory`), the hook calls pool.end() exactly once.
- *  3. When the consumer supplied their own `pool`, the hook does NOT
- *     call pool.end().
+ * Verify Nest closes an actual owned PostgreSQL connection while leaving a
+ * consumer-owned pool usable. A spy on an unopened pool cannot establish this.
  */
 import 'reflect-metadata';
-import { Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import type { Pool } from 'pg';
+import { Pool } from 'pg';
 
 import { PostgresStorage } from '../../src/storage/postgres.storage';
 import { IdempotencyModule } from '../../src/idempotency.module';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeOrSkip = TEST_DATABASE_URL ? describe : describe.skip;
-
-// Per-spec table isolation: every PG spec uses its own table so jest's
-// parallel test runner cannot cause TRUNCATEs to collide between specs.
-const TABLE_NAME = 'idempotency_records_lifecycle';
+const connection = {
+  connectionString: TEST_DATABASE_URL,
+  connectionTimeoutMillis: 2000,
+  query_timeout: 3000,
+};
 
 describeOrSkip('PostgresStorage lifecycle', () => {
   it('closes the internally-owned pool via OnModuleDestroy when the Nest app shuts down', async () => {
     let factoryPool: Pool | undefined;
-
-    @Module({
-      imports: [
-        IdempotencyModule.forRoot({
-          storage: new PostgresStorage({
-            connection: { connectionString: TEST_DATABASE_URL },
-            tableName: TABLE_NAME,
-            poolFactory: (cfg): Pool => {
-              // eslint-disable-next-line @typescript-eslint/no-var-requires
-              const PgPool = require('pg').Pool;
-              factoryPool = new PgPool(cfg) as Pool;
-              return factoryPool!;
-            },
-          }),
-        }),
-      ],
-    })
-    class AppModule {}
-
-    const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const storage = new PostgresStorage({
+      connection,
+      poolFactory: (config) => {
+        factoryPool = new Pool(config);
+        return factoryPool;
+      },
+    });
+    const pool = factoryPool!;
+    const endSpy = jest.spyOn(pool, 'end');
+    const mod = await Test.createTestingModule({
+      imports: [IdempotencyModule.forRoot({ storage })],
+    }).compile();
     const app = mod.createNestApplication();
-    await app.init();
+    let closed = false;
+    try {
+      await app.init();
+      expect((await pool.query('SELECT 1 AS value')).rows).toEqual([{ value: 1 }]);
+      expect(pool.totalCount).toBeGreaterThan(0);
+      expect(endSpy).not.toHaveBeenCalled();
 
-    expect(factoryPool).toBeDefined();
-    const endSpy = jest.spyOn(factoryPool!, 'end');
-
-    await app.close();
-    expect(endSpy).toHaveBeenCalledTimes(1);
+      await app.close();
+      closed = true;
+      expect(endSpy).toHaveBeenCalledTimes(1);
+      expect(pool.totalCount).toBe(0);
+      await expect(pool.query('SELECT 1')).rejects.toThrow(/after calling end/);
+    } finally {
+      try {
+        if (!closed) await app.close();
+      } finally {
+        if (endSpy.mock.calls.length === 0) await pool.end();
+      }
+    }
   });
 
-  it('does NOT close a consumer-supplied pool on shutdown', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { Pool } = require('pg') as typeof import('pg');
-    const consumerPool = new Pool({ connectionString: TEST_DATABASE_URL });
+  it('leaves a consumer-supplied pool usable after Nest shutdown', async () => {
+    const consumerPool = new Pool(connection);
     const endSpy = jest.spyOn(consumerPool, 'end');
-
-    @Module({
-      imports: [
-        IdempotencyModule.forRoot({
-          storage: new PostgresStorage({ pool: consumerPool, tableName: TABLE_NAME }),
-        }),
-      ],
-    })
-    class AppModule {}
-
-    const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const storage = new PostgresStorage({ pool: consumerPool });
+    const mod = await Test.createTestingModule({
+      imports: [IdempotencyModule.forRoot({ storage })],
+    }).compile();
     const app = mod.createNestApplication();
-    await app.init();
-    await app.close();
+    let closed = false;
+    try {
+      await app.init();
+      expect((await consumerPool.query('SELECT 1 AS value')).rows).toEqual([{ value: 1 }]);
+      await app.close();
+      closed = true;
 
-    expect(endSpy).not.toHaveBeenCalled();
-
-    await consumerPool.end();
+      expect(endSpy).not.toHaveBeenCalled();
+      expect((await consumerPool.query('SELECT 2 AS value')).rows).toEqual([{ value: 2 }]);
+    } finally {
+      try {
+        if (!closed) await app.close();
+      } finally {
+        if (endSpy.mock.calls.length === 0) await consumerPool.end();
+      }
+    }
   });
 });

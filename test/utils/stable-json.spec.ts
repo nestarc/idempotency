@@ -6,9 +6,7 @@ describe('stableJsonStringify', () => {
     const b = { list: [{ x: 1, y: 2 }], a: { b: 2, d: 4 }, z: 1 };
 
     expect(stableJsonStringify(a)).toBe(stableJsonStringify(b));
-    expect(stableJsonStringify(a)).toBe(
-      '{"a":{"b":2,"d":4},"list":[{"x":1,"y":2}],"z":1}',
-    );
+    expect(stableJsonStringify(a)).toBe('{"a":{"b":2,"d":4},"list":[{"x":1,"y":2}],"z":1}');
   });
 
   it('sorts array-index-like object keys lexicographically', () => {
@@ -105,9 +103,7 @@ describe('stableJsonStringify', () => {
   });
 
   it('serializes function and symbol array elements as null like JSON.stringify', () => {
-    expect(stableJsonStringify([1, () => 2, Symbol('three'), 4])).toBe(
-      '[1,null,null,4]',
-    );
+    expect(stableJsonStringify([1, () => 2, Symbol('three'), 4])).toBe('[1,null,null,4]');
   });
 
   it('passes the empty string key to root toJSON values', () => {
@@ -142,9 +138,7 @@ describe('stableJsonStringify', () => {
       ],
     };
 
-    expect(stableJsonStringify(value)).toBe(
-      '{"child":{"c":3,"d":4},"list":[{"x":1,"y":2}]}',
-    );
+    expect(stableJsonStringify(value)).toBe('{"child":{"c":3,"d":4},"list":[{"x":1,"y":2}]}');
     expect(keys).toEqual(['child', '0']);
   });
 
@@ -238,6 +232,29 @@ describe('stableJsonStringify', () => {
     value.self = value;
 
     expect(() => stableJsonStringify(value)).toThrow(/circular/i);
+  });
+
+  it('allows shared references across siblings without confusing them with a cycle', () => {
+    const shared = Object.freeze({ z: 2, a: 1 });
+    const body = Object.freeze({ right: shared, left: shared });
+    expect(stableJsonStringify(body)).toBe('{"left":{"a":1,"z":2},"right":{"a":1,"z":2}}');
+  });
+
+  it('escapes property names and string data without changing their meaning', () => {
+    const body = { 'quote"': 'line\nnext\t\\end' };
+    expect(stableJsonStringify(body)).toBe(String.raw`{"quote\"":"line\nnext\t\\end"}`);
+  });
+
+  it('uses JSON null values for sparse array entries and nonfinite numbers', () => {
+    const sparse = new Array(2);
+    sparse[1] = { infinite: Infinity, nan: NaN, negative: -Infinity };
+    expect(stableJsonStringify(sparse)).toBe('[null,{"infinite":null,"nan":null,"negative":null}]');
+  });
+
+  it('serializes Date.toJSON as the standard ISO string', () => {
+    expect(stableJsonStringify({ at: new Date('2026-01-02T03:04:05.000Z') })).toBe(
+      '{"at":"2026-01-02T03:04:05.000Z"}',
+    );
   });
 
   it('throws on BigInt values like JSON.stringify', () => {

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +21,7 @@ import {
   sha256,
   verifyArtifact,
   verifyConsumer,
+  verifyEvidenceFile,
   verifyJest,
   verifyMatrix,
   verifyS5,
@@ -22,12 +31,14 @@ import { matrixVersions } from '../../scripts/release-matrix.mjs';
 
 const output = mkdtempSync(join(tmpdir(), 'idempotency-gate-tests-'));
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+// Synthetic records isolate the gate's validation logic. They do not prove that
+// tests ran, a commit exists, or a package executes; real runner/matrix jobs do that.
 const commit = 'a'.repeat(40);
 const artifact = {
   schemaVersion: 1,
   result: 'pass',
   commit,
-  version: '1.0.0-rc.1',
+  version: '0.0.0-gate-fixture',
   tarball: 'candidate.tgz',
   sha256: 'b'.repeat(64),
   source: { clean: true, snapshotSha256: 'c'.repeat(64) },
@@ -133,10 +144,13 @@ function s5Evidence() {
   };
 }
 
-test('complete baseline is accepted: 41 suites, 937 assertions, consumers and ten real-crash scenarios', () => {
+test('the complete required baseline, consumers and ten real-crash scenarios are accepted', () => {
   assert.deepEqual(
     { suites: verifyJest(jestEvidence()).suites, passed: verifyJest(jestEvidence()).passed },
-    { suites: 41, passed: 937 },
+    {
+      suites: Object.keys(REQUIRED_SPECS).length,
+      passed: Object.values(REQUIRED_SPECS).reduce((sum, count) => sum + count, 0),
+    },
   );
   assert.equal(verifyConsumer(consumerEvidence(), artifact, cell).skipped, 0);
   assert.equal(verifyS5(s5Evidence()).scenarios, 10);
@@ -346,7 +360,7 @@ function packedFixture(name, missingFile) {
   return { manifest, manifestPath, tarball, directory };
 }
 
-test('actual tar archive with matching version/checksum/commit is accepted', () => {
+test('structural tar archive fixture with matching version/checksum/commit is accepted', () => {
   const candidate = packedFixture('valid-artifact');
   assert.equal(
     verifyArtifact(candidate.manifestPath, commit, artifact.version).fileCount,
@@ -450,4 +464,264 @@ test('rehashed skipped consumer summary still fails aggregate publication gate',
   report.evidence.consumer.sha256 = sha256(join(child, 'consumer.json'));
   save(join(child, 'validation.json'), report);
   assert.throws(() => verifyMatrix(artifact, directory), /must be pass/);
+});
+
+for (const [label, mutate, diagnostic] of [
+  [
+    'duplicate required suite',
+    (report) => report.testResults.push(copy(report.testResults[0])),
+    /Duplicate Jest suite/,
+  ],
+  [
+    'empty assertion list',
+    (report) => {
+      report.testResults[0].assertionResults = [];
+    },
+    /Empty Jest suite/,
+  ],
+  [
+    'failed suite with green counters',
+    (report) => {
+      report.testResults[0].status = 'failed';
+    },
+    /suite did not pass/,
+  ],
+  [
+    'failed assertion with green counters',
+    (report) => {
+      report.testResults[0].assertionResults[0].status = 'failed';
+    },
+    /Non-passing Jest assertion/,
+  ],
+  [
+    'total suite count mismatch',
+    (report) => {
+      report.numTotalTestSuites += 1;
+    },
+    /total suite count disagrees/,
+  ],
+  [
+    'passed suite count mismatch',
+    (report) => {
+      report.numPassedTestSuites -= 1;
+    },
+    /passed suite count disagrees/,
+  ],
+]) {
+  test(`Jest rejects ${label}`, () => {
+    const report = jestEvidence();
+    mutate(report);
+    assert.throws(() => verifyJest(report), diagnostic);
+  });
+}
+
+for (const [label, mutate, diagnostic] of [
+  [
+    'baseline mode',
+    (report) => {
+      report.mode = 'baseline';
+    },
+    /must validate the candidate/,
+  ],
+  [
+    'wrong commit',
+    (report) => {
+      report.commit = 'd'.repeat(40);
+    },
+    /commit mismatch/,
+  ],
+  [
+    'wrong Node runtime',
+    (report) => {
+      report.node = 'v22.0.0';
+    },
+    /Node matrix mismatch/,
+  ],
+  [
+    'wrong peer profile',
+    (report) => {
+      report.peerProfile = 'minimum';
+    },
+    /peer profile mismatch/,
+  ],
+  [
+    'explicit service skip',
+    (report) => {
+      report.services.explicitlySkipped = true;
+    },
+    /skipped services/,
+  ],
+  [
+    'missing Redis URL evidence',
+    (report) => {
+      report.services.redisUrlProvided = false;
+    },
+    /Redis URL missing/,
+  ],
+  [
+    'missing PostgreSQL URL evidence',
+    (report) => {
+      report.services.databaseUrlProvided = false;
+    },
+    /PostgreSQL URL missing/,
+  ],
+  [
+    'duplicate check',
+    (report) => report.checks.push(copy(report.checks[0])),
+    /Duplicate consumer check/,
+  ],
+  [
+    'missing installed driver',
+    (report) => {
+      delete report.consumers.redis.installedVersions.ioredis;
+    },
+    /installed dependency mismatch/,
+  ],
+  [
+    'wrong configured versions',
+    (report) => {
+      report.versions.ioredis = '0.0.0';
+    },
+    /configured dependency versions mismatch/,
+  ],
+  [
+    'missing expected declaration failure',
+    (report) => {
+      report.checks.find((check) => check.name === 'postgres-without-pg-types-node').status =
+        'pass';
+    },
+    /Missing expected PostgreSQL declaration failure/,
+  ],
+]) {
+  test(`consumer rejects ${label} even when result claims pass`, () => {
+    const report = consumerEvidence();
+    mutate(report);
+    assert.throws(() => verifyConsumer(report, artifact, cell), diagnostic);
+  });
+}
+
+test('real-crash evidence rejects graceful or different-signal exits', () => {
+  for (const exit of [
+    { code: 0, signal: null },
+    { code: null, signal: 'SIGTERM' },
+  ]) {
+    const report = s5Evidence();
+    report.scenarios[0].exit = exit;
+    assert.throws(() => verifyS5(report), /must record SIGKILL/);
+  }
+});
+test('real-crash evidence cannot be supplied by a different fixture', () => {
+  const report = s5Evidence();
+  report.fixture = 'failure-lifecycle.spec.ts';
+  assert.throws(() => verifyS5(report), /fixture missing/);
+});
+
+for (const path of ['/tmp/outside-evidence.json', '../outside-evidence.json', '.']) {
+  test(`evidence path ${path} cannot bypass its validation directory`, () => {
+    assert.throws(
+      () => verifyEvidenceFile(output, { path, sha256: '0'.repeat(64) }),
+      /absolute|escapes its validation directory/,
+    );
+  });
+}
+test('matching evidence digest returns the actual parsed file and changing bytes invalidates it', () => {
+  const path = join(output, 'direct-evidence.json');
+  save(path, { result: 'pass', observations: [1, 2] });
+  const record = { path: 'direct-evidence.json', sha256: sha256(path) };
+  assert.deepEqual(verifyEvidenceFile(output, record), { result: 'pass', observations: [1, 2] });
+  save(path, { result: 'pass', observations: [] });
+  assert.throws(() => verifyEvidenceFile(output, record), /Evidence checksum mismatch/);
+});
+
+for (const [label, mutate, diagnostic] of [
+  [
+    'failed cell',
+    (report) => {
+      report.result = 'fail';
+    },
+    /Matrix cell did not pass/,
+  ],
+  [
+    'wrong commit',
+    (report) => {
+      report.commit = 'd'.repeat(40);
+    },
+    /artifact commit mismatch/,
+  ],
+  [
+    'wrong tarball digest',
+    (report) => {
+      report.sha256 = 'd'.repeat(64);
+    },
+    /artifact checksum mismatch/,
+  ],
+  [
+    'wrong source snapshot',
+    (report) => {
+      report.sourceSnapshotSha256 = 'd'.repeat(64);
+    },
+    /source snapshot mismatch/,
+  ],
+  [
+    'unsupported Node cell',
+    (report) => {
+      report.cell.node = '26';
+    },
+    /Unexpected or duplicate matrix cell/,
+  ],
+  [
+    'installed source dependency drift',
+    (report) => {
+      report.installedVersions.pg = '0.0.0';
+    },
+    /installed dependency versions mismatch/,
+  ],
+]) {
+  test(`aggregate publication gate rejects ${label}`, () => {
+    const directory = matrixFixture(`aggregate-${label.replaceAll(' ', '-')}`);
+    const path = join(directory, '22-10-minimum/validation.json');
+    const report = JSON.parse(readFileSync(path, 'utf8'));
+    mutate(report);
+    save(path, report);
+    assert.throws(() => verifyMatrix(artifact, directory), diagnostic);
+  });
+}
+
+test('rehashing weakened Jest evidence cannot hide a missing required spec at the matrix gate', () => {
+  const directory = matrixFixture('rehash-missing-jest-spec');
+  const child = join(directory, '22-10-minimum');
+  const report = JSON.parse(readFileSync(join(child, 'validation.json'), 'utf8'));
+  const jest = jestEvidence();
+  jest.testResults.pop();
+  save(join(child, 'jest.json'), jest);
+  report.evidence.jest.sha256 = sha256(join(child, 'jest.json'));
+  save(join(child, 'validation.json'), report);
+  assert.throws(() => verifyMatrix(artifact, directory), /Required Jest spec missing/);
+});
+test('rehashing weakened crash evidence cannot hide a graceful exit at the matrix gate', () => {
+  const directory = matrixFixture('rehash-graceful-exit');
+  const child = join(directory, '22-10-minimum');
+  const report = JSON.parse(readFileSync(join(child, 'validation.json'), 'utf8'));
+  const crashes = s5Evidence();
+  crashes.scenarios[0].exit = { code: 0, signal: null };
+  save(join(child, 's5.json'), crashes);
+  report.evidence.s5.sha256 = sha256(join(child, 's5.json'));
+  save(join(child, 'validation.json'), report);
+  assert.throws(() => verifyMatrix(artifact, directory), /must record SIGKILL/);
+});
+
+test('release baseline includes every real Jest spec in the test tree', () => {
+  function specs(directory, prefix = 'test') {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const name = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) return specs(join(directory, entry.name), name);
+      return entry.isFile() && /(?:\.spec|\.e2e-spec)\.ts$/.test(entry.name) ? [name] : [];
+    });
+  }
+  assert.deepEqual(Object.keys(REQUIRED_SPECS).sort(), specs(join(repository, 'test')).sort());
+});
+test('a second complete copy of a valid cell is rejected as duplicate evidence', () => {
+  const directory = matrixFixture('duplicate-complete-cell');
+  cpSync(join(directory, '22-10-minimum'), join(directory, 'duplicate-copy'), { recursive: true });
+  assert.throws(() => verifyMatrix(artifact, directory), /duplicate matrix cell/);
 });

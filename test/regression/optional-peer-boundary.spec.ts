@@ -92,12 +92,16 @@ describe('optional peer boundaries', () => {
         peer === 'pg'
           ? new (loadPostgres().PostgresStorage)({ connection: {} })
           : new (loadRedis().RedisStorage)({ connection: {} });
-      expect(construct).toThrow(`npm install ${peer}`);
+      let failure: unknown;
       try {
         construct();
       } catch (error) {
-        expect((error as Error).cause).toBe(cause);
+        failure = error;
       }
+      // Assert outside catch: successful construction must never silently pass.
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(`npm install ${peer}`);
+      expect((failure as Error).cause).toBe(cause);
     },
   );
 

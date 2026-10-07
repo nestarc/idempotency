@@ -14,13 +14,9 @@ import 'reflect-metadata';
 import { Module, type DynamicModule } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 
-import {
-  IDEMPOTENCY_STORAGE,
-  IDEMPOTENCY_SWEEP_OPTIONS,
-  IdempotencyModule,
-} from '../../src';
+import { IDEMPOTENCY_STORAGE, IDEMPOTENCY_SWEEP_OPTIONS, IdempotencyModule } from '../../src';
 import { PostgresStorage, PostgresSweepService } from '../../src/postgres';
 
 const registrations: {
@@ -104,7 +100,11 @@ describeReal('PostgresSweepService documented wiring against real PostgreSQL', (
   it.each(registrations)(
     '$name removes expired rows and leaves the external Pool usable after close',
     async ({ register }) => {
-      const pool = new Pool({ connectionString: DATABASE_URL });
+      const pool = new Pool({
+        connectionString: DATABASE_URL,
+        connectionTimeoutMillis: 5_000,
+        query_timeout: 10_000,
+      });
       const end = jest.spyOn(pool, 'end');
       const tableName = `idempotency_s7_sweep_${randomUUID().replace(/-/g, '')}`;
       const storage = new PostgresStorage({
@@ -113,7 +113,14 @@ describeReal('PostgresSweepService documented wiring against real PostgreSQL', (
         autoCreateSchema: true,
       });
       let mod: TestingModule | undefined;
+      let fixtureLock: PoolClient | undefined;
       try {
+        // The service uses a global advisory key. Coordinate with the real
+        // service spec so parallel Jest workers cannot skip each other's sweep.
+        fixtureLock = await pool.connect();
+        await fixtureLock.query(
+          "SELECT pg_advisory_lock(hashtext('idempotency-test-sweep-fixture'))",
+        );
         mod = await compileExample(storage, register);
         await mod.init();
         await pool.query(
@@ -141,7 +148,16 @@ describeReal('PostgresSweepService documented wiring against real PostgreSQL', (
         try {
           await pool.query(`DROP TABLE IF EXISTS "${tableName}"`);
         } finally {
-          await pool.end();
+          try {
+            if (fixtureLock) {
+              await fixtureLock.query(
+                "SELECT pg_advisory_unlock(hashtext('idempotency-test-sweep-fixture'))",
+              );
+            }
+          } finally {
+            fixtureLock?.release();
+            await pool.end();
+          }
         }
       }
     },

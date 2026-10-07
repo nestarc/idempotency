@@ -344,12 +344,25 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       const retry = await pay();
       expect(first.status).toBe(201);
       expect(retry.status).toBe(201);
+      expect(first.body).toEqual({
+        commandId: 'pay-1',
+        amount: 100,
+        currency: 'USD',
+        providerReference: expect.stringMatching(/^fake-[a-f0-9-]{36}$/),
+      });
       expect(retry.body).toEqual(first.body);
       expect(first.body).not.toHaveProperty('internalAuditNote');
       expect(first.headers['idempotency-status']).toBe('created');
       expect(retry.headers['idempotency-status']).toBe('replayed');
       expect(ledger.provider.calls).toBe(1);
       expect(state.handlerCalls).toBe(1);
+      expect((await pool.query(
+        `SELECT tenant_id, user_id, kind, command_id, parameters, state, result
+         FROM ${ledger.schema}.commands`,
+      )).rows).toEqual([{
+        tenant_id: 'tenant-a', user_id: 'alice', kind: 'payment', command_id: 'pay-1',
+        parameters: { amount: 100, currency: 'USD' }, state: 'succeeded', result: first.body,
+      }]);
     });
 
     it('rejects changed intent before replay and after a caller changes only the HTTP key', async () => {
@@ -357,6 +370,13 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       expect((await pay('pay-1', 999)).status).toBe(422);
       expect((await pay('pay-1', 999, 'alice', 'different-http-key')).status).toBe(422);
       expect(ledger.provider.calls).toBe(1);
+      expect(state.handlerCalls).toBe(2); // Only the changed HTTP key reaches the durable ledger.
+      const replay = await pay();
+      expect(replay.status).toBe(201);
+      expect(replay.body).toMatchObject({ commandId: 'pay-1', amount: 100, currency: 'USD' });
+      expect(replay.headers['idempotency-status']).toBe('replayed');
+      expect((await pool.query(`SELECT parameters FROM ${ledger.schema}.commands`)).rows)
+        .toEqual([{ parameters: { amount: 100, currency: 'USD' } }]);
     });
 
     it('isolates tenant/user/endpoint and enforces ownership again on a cache miss', async () => {
@@ -377,6 +397,8 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
     it('keeps a durable payment result after handler failure and replay-cache loss', async () => {
       state.failAfterLedgerCommit = true;
       expect((await pay()).status).toBe(503);
+      expect((await pool.query(`SELECT state, result FROM ${ledger.schema}.commands`)).rows)
+        .toEqual([{ state: 'succeeded', result: expect.objectContaining({ amount: 100 }) }]);
       const retry = await pay();
       expect(retry.status).toBe(201);
       // Model loss of this memory cache on an app restart, never an operator unlock.
@@ -392,11 +414,15 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       ledger.provider.loseAcknowledgment = true;
       expect((await pay()).status).toBe(503);
       expect((await pay()).status).toBe(409);
+      expect((await pool.query(`SELECT state, result FROM ${ledger.schema}.commands`)).rows)
+        .toEqual([{ state: 'pending', result: null }]);
       const canonical = await ledger.reconcile(accounts.alice, 'pay-1');
       expect(canonical).toMatchObject({ commandId: 'pay-1', amount: 100 });
       const retry = await pay();
       expect(retry.status).toBe(201);
       expect(retry.body).toEqual(canonical);
+      expect((await pool.query(`SELECT state, result FROM ${ledger.schema}.commands`)).rows)
+        .toEqual([{ state: 'succeeded', result: canonical }]);
       expect(ledger.provider.calls).toBe(1);
     });
 
@@ -408,6 +434,8 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       await storage.onModuleDestroy();
       expect((await pay()).status).toBe(409);
       expect(ledger.provider.calls).toBe(1);
+      expect((await pool.query(`SELECT state, result FROM ${ledger.schema}.commands`)).rows)
+        .toEqual([{ state: 'pending', result: null }]);
     });
 
     it('atomically deduplicates orders by command and business identity after cache loss', async () => {
@@ -417,7 +445,17 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       expect((await order('another-command')).status).toBe(201);
       expect((await order('changed-intent', 2)).status).toBe(422);
       const rows = await pool.query(`SELECT * FROM ${ledger.schema}.orders`);
-      expect(rows.rowCount).toBe(1);
+      expect(rows.rows).toEqual([{
+        tenant_id: 'tenant-a', order_id: 'order-1', user_id: 'alice', sku: 'book', quantity: 1,
+      }]);
+      const commands = await pool.query(
+        `SELECT command_id, state, result FROM ${ledger.schema}.commands ORDER BY command_id`,
+      );
+      // A rejected changed order must roll back its command insertion as well.
+      expect(commands.rows).toEqual([
+        { command_id: 'another-command', state: 'succeeded', result: { orderId: 'order-1' } },
+        { command_id: 'order-command-1', state: 'succeeded', result: { orderId: 'order-1' } },
+      ]);
     });
 
     function event(overrides: Partial<RecipeEvent> = {}): RecipeEvent {
@@ -448,6 +486,7 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
     it('verifies signature and timestamp before consulting an existing replay record', async () => {
       const first = await webhook(event());
       expect(first.status).toBe(200);
+      expect(first.body).toEqual({ accepted: true });
       const lookup = jest.spyOn(storage, 'get');
       expect((await webhook(event(), false)).status).toBe(401);
       expect((await webhook(event(), true, '1')).status).toBe(401);
@@ -455,6 +494,7 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       const retry = await webhook(event());
       expect(retry.status).toBe(200);
       expect(retry.body).toEqual(first.body);
+      expect(retry.headers['idempotency-status']).toBe('replayed');
       expect(state.handlerCalls).toBe(1);
       expect(state.signatureChecks).toBe(4);
     });
@@ -474,7 +514,9 @@ describeWithDatabase.each(['Express', 'Fastify'] as const)(
       const fulfillment = await pool.query(`SELECT * FROM ${ledger.schema}.fulfillments`);
       expect(inbox.rowCount).toBe(3);
       expect(projection.rows).toEqual([{ version: 3, state: 'paid' }]);
-      expect(fulfillment.rowCount).toBe(1);
+      expect(fulfillment.rows).toEqual([
+        { account_id: 'provider-account-a', object_id: 'provider-order-1' },
+      ]);
     });
 
     it('rejects changed signed content for an existing event even after replay-cache loss', async () => {

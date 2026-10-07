@@ -14,17 +14,16 @@
  * instead of duplicate execution.
  */
 import 'reflect-metadata';
+import { ConflictException, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { firstValueFrom, of } from 'rxjs';
 
 import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { IDEMPOTENT_METADATA_KEY } from '../../src/idempotency.constants';
 import type { IdempotencyOptions } from '../../src/interfaces/idempotency-options.interface';
-import { FakeStorage } from '../support/fake-storage';
-import {
-  buildCallHandler,
-  buildExecutionContext,
-} from '../support/execution-context.factory';
+import { MemoryStorage } from '../../src/storage/memory.storage';
+import { globalRequestKey } from '../support/request-key';
+import { buildCallHandler, buildExecutionContext } from '../support/execution-context.factory';
 
 const decoratedHandler = () => {
   const handler = function h() {
@@ -35,44 +34,55 @@ const decoratedHandler = () => {
 };
 
 describe('REPRO: complete() failure cascade', () => {
+  afterEach(() => jest.restoreAllMocks());
+
   it('emits the handler value and does NOT delete the record when storage.complete() throws', async () => {
-    const storage = new FakeStorage();
-    // Simulate a transient storage write failure.
-    storage.complete.mockImplementationOnce(async () => {
-      throw new Error('redis write failed');
-    });
+    const storage = new MemoryStorage();
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const remove = jest.spyOn(storage, 'delete');
+    try {
+      // Simulate a transient storage write failure.
+      jest.spyOn(storage, 'complete').mockImplementationOnce(async () => {
+        throw new Error('redis write failed');
+      });
 
-    const options: IdempotencyOptions = {
-      storage,
-      ttl: 60,
-      headerName: 'Idempotency-Key',
-      fingerprint: true,
-      scope: 'global',
-    };
-    const interceptor = new IdempotencyInterceptor(
-      new Reflector(),
-      storage,
-      options,
-    );
-    const handler = decoratedHandler();
-    const { context } = buildExecutionContext({
-      req: {
-        method: 'POST',
-        headers: { 'idempotency-key': 'K-cascade' },
-        body: {},
-      },
-      handler,
-    });
-    const handlerResult = { ok: true, id: 'business-op' };
-    const next = buildCallHandler(of(handlerResult));
+      const options: IdempotencyOptions = {
+        storage,
+        ttl: 60,
+        headerName: 'Idempotency-Key',
+        fingerprint: true,
+        scope: 'global',
+      };
+      const interceptor = new IdempotencyInterceptor(new Reflector(), storage, options);
+      const handler = decoratedHandler();
+      const { context } = buildExecutionContext({
+        req: {
+          method: 'POST',
+          headers: { 'idempotency-key': 'K-cascade' },
+          body: {},
+        },
+        handler,
+      });
+      const handlerResult = { ok: true, id: 'business-op' };
+      const next = buildCallHandler(of(handlerResult));
 
-    // Desired behavior: the caller gets the handler's response, and the
-    // record is NOT deleted (so a retry with the same key sees PROCESSING
-    // and gets 409 instead of re-executing the handler).
-    const result = await firstValueFrom(
-      interceptor.intercept(context, next),
-    );
-    expect(result).toEqual(handlerResult);
-    expect(storage.delete).not.toHaveBeenCalled();
+      // Desired behavior: the caller gets the handler's response, and the
+      // record is NOT deleted (so a retry with the same key sees PROCESSING
+      // and gets 409 instead of re-executing the handler).
+      const result = await firstValueFrom(interceptor.intercept(context, next));
+      expect(result).toEqual(handlerResult);
+      expect(remove).not.toHaveBeenCalled();
+      expect(next.handleSpy).toHaveBeenCalledTimes(1);
+      const lock = await storage.get(globalRequestKey('K-cascade'));
+      expect(lock).toMatchObject({ status: 'PROCESSING', token: expect.any(String) });
+      const retry = buildCallHandler(of({ duplicate: true }));
+      await expect(firstValueFrom(interceptor.intercept(context, retry))).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(retry.handleSpy).not.toHaveBeenCalled();
+      expect(await storage.get(globalRequestKey('K-cascade'))).toEqual(lock);
+    } finally {
+      await storage.onModuleDestroy();
+    }
   });
 });

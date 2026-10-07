@@ -202,10 +202,9 @@ describe.each(['Express', 'Fastify'] as const)('response replay over real HTTP (
             logger: false,
           })
         : moduleRef.createNestApplication({ logger: false });
-    await app.init();
-    if (adapter === 'Fastify') {
-      await app.getHttpAdapter().getInstance().ready();
-    }
+    // Bind explicitly so setup fails directly if sockets are unavailable and
+    // all real HTTP requests stay on the loopback interface.
+    await app.listen(0, '127.0.0.1');
   });
 
   beforeEach(async () => {
@@ -240,6 +239,7 @@ describe.each(['Express', 'Fastify'] as const)('response replay over real HTTP (
         expect(response.headers.location).toBe('/receipts/receipt-1');
         expect(response.headers['x-receipt-version']).toBe('1');
       }
+      expect(first.headers['idempotency-status']).toBe('created');
       expect(replay.headers['idempotency-status']).toBe('replayed');
       expect(calls).toEqual([route]);
     },
@@ -276,10 +276,7 @@ describe.each(['Express', 'Fastify'] as const)('response replay over real HTTP (
         : moduleRef.createNestApplication({ logger: false });
 
     try {
-      await globalApp.init();
-      if (adapter === 'Fastify') {
-        await globalApp.getHttpAdapter().getInstance().ready();
-      }
+      await globalApp.listen(0, '127.0.0.1');
       const send = () =>
         request(globalApp.getHttpServer())
           .post('/global-order')

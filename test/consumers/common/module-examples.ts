@@ -75,7 +75,10 @@ export async function verifyModuleRegistrations(storage: IdempotencyStorage): Pr
     try {
       await module.init();
       assert.equal(module.get(IDEMPOTENCY_STORAGE), storage);
-      assert.equal(module.get<IdempotencyOptions>(IDEMPOTENCY_OPTIONS).ttl, 86_400);
+      const options = module.get<IdempotencyOptions>(IDEMPOTENCY_OPTIONS);
+      assert.equal(options.ttl, 86_400);
+      assert.equal(options.processingTtl, 30);
+      assert.equal(options.storage, storage);
       if (label.endsWith('useClass') || label.endsWith('useExisting')) {
         assert.equal(factoryInstances - previousInstances, 1, `${label} creates one factory`);
         assert.equal(

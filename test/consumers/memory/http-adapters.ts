@@ -46,12 +46,14 @@ export async function runHttpAdapter(name: 'express' | 'fastify'): Promise<void>
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': 'adapter-command' },
         body: JSON.stringify({ amount }),
+        signal: AbortSignal.timeout(5000),
       });
     const created = await request(100);
     assert.equal(created.status, 201);
     assert.equal(created.headers.get('idempotency-status'), 'created');
     const body = await created.text();
     assert.deepEqual(JSON.parse(body), { amount: 100, accepted: true });
+    assert.equal(calls, 1);
     const replayed = await request(100);
     assert.equal(replayed.status, 201);
     assert.equal(replayed.headers.get('idempotency-status'), 'replayed');
@@ -59,6 +61,7 @@ export async function runHttpAdapter(name: 'express' | 'fastify'): Promise<void>
     assert.equal(await replayed.text(), body);
     const mismatch = await request(101);
     assert.equal(mismatch.status, 422);
+    assert.equal(mismatch.headers.get('idempotency-status'), 'mismatch');
     await mismatch.text();
     assert.equal(calls, 1);
   } finally {

@@ -11,6 +11,23 @@ import { decodeReplayBody, encodeReplayBody } from '../../src/utils/replay-body'
 const PREFIX = '@nestarc/idempotency:replay:v1:';
 
 describe('REGRESSION: versioned replay body format', () => {
+  // Literal persisted fixtures pin the public storage protocol independently of
+  // either codec. An encoder and decoder drifting together must still fail.
+  it.each([
+    [undefined, '@nestarc/idempotency:replay:v1:{"kind":"undefined"}'],
+    [null, '@nestarc/idempotency:replay:v1:{"kind":"json","value":null}'],
+    [false, '@nestarc/idempotency:replay:v1:{"kind":"json","value":false}'],
+    [0, '@nestarc/idempotency:replay:v1:{"kind":"json","value":0}'],
+    ['', '@nestarc/idempotency:replay:v1:{"kind":"json","value":""}'],
+    [
+      { id: 'order-1', items: [1, null, true] },
+      '@nestarc/idempotency:replay:v1:{"kind":"json","value":{"id":"order-1","items":[1,null,true]}}',
+    ],
+  ] as Array<[unknown, string]>)('matches the stored v1 fixture for %p', (value, persisted) => {
+    expect(encodeReplayBody(value)).toBe(persisted);
+    expect(decodeReplayBody(persisted)).toEqual({ replayable: true, value });
+  });
+
   it.each(
     [null, true, false, 0, -3.5, '', 'text', [], {}, [1, { nested: 'ok' }]].map((value) => [value]),
   )('round-trips a plain JSON response: %p', (value) => {

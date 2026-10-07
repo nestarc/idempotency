@@ -21,6 +21,8 @@ import { MemoryStorage } from '../../src/storage/memory.storage';
 
 /** Counter that lets us verify the handler ran exactly once across replays. */
 const callCounter = { create: 0, refund: 0, fail: 0, cross: 0, capture: 0 };
+const storage = new MemoryStorage();
+let inFlight: { entered: () => void; release: Promise<void> } | undefined;
 
 @Controller('payments')
 class PaymentsController {
@@ -28,8 +30,12 @@ class PaymentsController {
   @HttpCode(201)
   @Idempotent()
   @UseInterceptors(IdempotencyInterceptor)
-  create(@Body() dto: { amount: number }) {
+  async create(@Body() dto: { amount: number }) {
     callCounter.create += 1;
+    if (inFlight) {
+      inFlight.entered();
+      await inFlight.release;
+    }
     return { id: `pay_${callCounter.create}`, kind: 'payment', amount: dto.amount };
   }
 
@@ -45,6 +51,8 @@ class PaymentsController {
     callCounter.create += 1;
     res.setHeader('Location', `/payments/pay_header_${callCounter.create}`);
     res.setHeader('X-Request-Id', `req_header_${callCounter.create}`);
+    res.setHeader('Set-Cookie', 'session=first-response-only; HttpOnly');
+    res.setHeader('Private-Trace', 'first-response-only');
     return { id: `pay_header_${callCounter.create}`, amount: dto.amount };
   }
 
@@ -99,7 +107,7 @@ class TransfersController {
 @Module({
   imports: [
     IdempotencyModule.forRoot({
-      storage: new MemoryStorage(),
+      storage,
       // Default scope 'endpoint' is what we want to verify — make it explicit.
       scope: 'endpoint',
     }),
@@ -123,7 +131,8 @@ describe('Idempotency (e2e)', () => {
     await app.close();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await storage.onModuleDestroy();
     callCounter.create = 0;
     callCounter.refund = 0;
     callCounter.fail = 0;
@@ -149,7 +158,8 @@ describe('Idempotency (e2e)', () => {
       .send({ amount: 250 });
 
     expect(first.status).toBe(201);
-    const firstId = first.body.id;
+    expect(first.body).toEqual({ id: 'pay_1', kind: 'payment', amount: 250 });
+    expect(first.headers['idempotency-status']).toBe('created');
 
     const second = await request(app.getHttpServer())
       .post('/payments')
@@ -157,12 +167,14 @@ describe('Idempotency (e2e)', () => {
       .send({ amount: 250 });
 
     expect(second.status).toBe(201);
-    expect(second.body.id).toBe(firstId);
+    expect(second.body).toEqual(first.body);
+    expect(second.headers['idempotency-status']).toBe('replayed');
+    expect(second.headers['idempotency-replayed']).toBe('true');
     expect(callCounter.create).toBe(1); // handler ran exactly once
   });
 
   it('returns 422 when the same key is reused with a different body', async () => {
-    await request(app.getHttpServer())
+    const original = await request(app.getHttpServer())
       .post('/payments')
       .set('Idempotency-Key', 'mismatch-key')
       .send({ amount: 100 });
@@ -173,6 +185,15 @@ describe('Idempotency (e2e)', () => {
       .send({ amount: 999 });
 
     expect(conflicting.status).toBe(422);
+    expect(conflicting.headers['idempotency-status']).toBe('mismatch');
+    const replay = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'mismatch-key')
+      .send({ amount: 100 });
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(original.body);
+    expect(replay.headers['idempotency-status']).toBe('replayed');
+    expect(callCounter.create).toBe(1);
   });
 
   it('returns 400 when the Idempotency-Key header is missing', async () => {
@@ -181,6 +202,7 @@ describe('Idempotency (e2e)', () => {
       .send({ amount: 50 });
 
     expect(res.status).toBe(400);
+    expect(callCounter.create).toBe(0);
   });
 
   it('deletes the key when the handler throws so the next attempt can succeed', async () => {
@@ -199,26 +221,71 @@ describe('Idempotency (e2e)', () => {
     expect(retry.status).toBe(201); // Default 201 since no @HttpCode set
     expect(retry.body).toEqual({ ok: true, attempt: 2 });
     expect(callCounter.fail).toBe(2); // The handler ran twice
+    const replay = await request(app.getHttpServer())
+      .post('/payments/failing')
+      .set('Idempotency-Key', 'retry-key')
+      .send({ payload: 1 });
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(retry.body);
+    expect(replay.headers['idempotency-status']).toBe('replayed');
+    expect(callCounter.fail).toBe(2);
   });
 
-  it('respects per-handler TTL override (refund uses ttl=300)', async () => {
-    // We can't time-travel through Express in a real-server test, but we can
-    // at least verify the route works and replays correctly with the override.
-    const first = await request(app.getHttpServer())
-      .post('/payments/refund')
-      .set('Idempotency-Key', 'refund-key')
-      .send({ id: 'pay_x' });
+  it('expires the refund override at 300 seconds while the default route still replays', async () => {
+    // Advance only Date: HTTP sockets and eviction timers retain their real scheduling.
+    jest.useFakeTimers({
+      doNotFake: [
+        'hrtime', 'nextTick', 'performance', 'queueMicrotask', 'setImmediate',
+        'clearImmediate', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout',
+      ],
+    });
+    const now = new Date('2026-01-01T00:00:00Z');
+    jest.setSystemTime(now);
+    try {
+      const payment = await request(app.getHttpServer())
+        .post('/payments')
+        .set('Idempotency-Key', 'default-ttl-key')
+        .send({ amount: 100 });
+      expect(payment.status).toBe(201);
+      const first = await request(app.getHttpServer())
+        .post('/payments/refund')
+        .set('Idempotency-Key', 'refund-key')
+        .send({ id: 'pay_x' });
 
-    expect(first.status).toBe(202);
+      expect(first.status).toBe(202);
+      expect(first.body).toEqual({ refundId: 'rfd_1', paymentId: 'pay_x' });
 
-    const second = await request(app.getHttpServer())
-      .post('/payments/refund')
-      .set('Idempotency-Key', 'refund-key')
-      .send({ id: 'pay_x' });
+      jest.setSystemTime(now.getTime() + 299_999);
+      const second = await request(app.getHttpServer())
+        .post('/payments/refund')
+        .set('Idempotency-Key', 'refund-key')
+        .send({ id: 'pay_x' });
 
-    expect(second.status).toBe(202);
-    expect(second.body).toEqual(first.body);
-    expect(callCounter.refund).toBe(1);
+      expect(second.status).toBe(202);
+      expect(second.body).toEqual(first.body);
+      expect(callCounter.refund).toBe(1);
+      expect(second.headers['idempotency-status']).toBe('replayed');
+
+      jest.setSystemTime(now.getTime() + 300_000);
+      const expired = await request(app.getHttpServer())
+        .post('/payments/refund')
+        .set('Idempotency-Key', 'refund-key')
+        .send({ id: 'pay_x' });
+      expect(expired.status).toBe(202);
+      expect(expired.body).toEqual({ refundId: 'rfd_2', paymentId: 'pay_x' });
+      expect(expired.headers['idempotency-status']).toBe('created');
+      expect(callCounter.refund).toBe(2);
+      const defaultReplay = await request(app.getHttpServer())
+        .post('/payments')
+        .set('Idempotency-Key', 'default-ttl-key')
+        .send({ amount: 100 });
+      expect(defaultReplay.status).toBe(201);
+      expect(defaultReplay.body).toEqual(payment.body);
+      expect(defaultReplay.headers['idempotency-status']).toBe('replayed');
+      expect(callCounter.create).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('replays safe response headers on duplicate requests', async () => {
@@ -231,6 +298,8 @@ describe('Idempotency (e2e)', () => {
     expect(first.body).toEqual({ id: 'pay_header_1', amount: 100 });
     expect(first.headers.location).toBe('/payments/pay_header_1');
     expect(first.headers['x-request-id']).toBe('req_header_1');
+    expect(first.headers['set-cookie']).toEqual(['session=first-response-only; HttpOnly']);
+    expect(first.headers['private-trace']).toBe('first-response-only');
 
     const second = await request(app.getHttpServer())
       .post('/payments/with-headers')
@@ -241,6 +310,8 @@ describe('Idempotency (e2e)', () => {
     expect(second.body).toEqual(first.body);
     expect(second.headers.location).toBe('/payments/pay_header_1');
     expect(second.headers['x-request-id']).toBe('req_header_1');
+    expect(second.headers['set-cookie']).toBeUndefined();
+    expect(second.headers['private-trace']).toBeUndefined();
     expect(callCounter.create).toBe(1);
   });
 
@@ -312,48 +383,43 @@ describe('Idempotency (e2e)', () => {
     expect(callCounter.capture).toBe(2);
   });
 
-  // Concurrency regression: two identical requests fired simultaneously
-  // must result in exactly ONE handler invocation. The loser must either
-  // replay the winner's response (COMPLETED race) or receive 409 (if it
-  // observes the winner still in-flight). No duplicate execution allowed.
-  it('handles two truly-concurrent identical requests with exactly one handler call', async () => {
-    const server = app.getHttpServer();
-
-    // Use Promise.all to fire both requests before either has a chance
-    // to finish. Both use the same Idempotency-Key and the same body.
-    const [a, b] = await Promise.all([
-      request(server)
-        .post('/payments')
-        .set('Idempotency-Key', 'concurrent-key')
-        .send({ amount: 777 }),
-      request(server)
-        .post('/payments')
-        .set('Idempotency-Key', 'concurrent-key')
-        .send({ amount: 777 }),
-    ]);
-
-    // Exactly one handler invocation.
-    expect(callCounter.create).toBe(1);
-
-    // Acceptable outcomes per IETF draft:
-    //   - Both 201 with identical body (replay path)
-    //   - One 201, one 409 (in-flight collision path)
-    // Both paths satisfy at-most-once, the only invariant that matters.
-    const statuses = [a.status, b.status].sort();
-    expect(statuses[0]).toBeLessThanOrEqual(statuses[1]);
-
-    const winners = [a, b].filter((r) => r.status === 201);
-    expect(winners.length).toBeGreaterThanOrEqual(1);
-
-    if (winners.length === 2) {
-      // Both succeeded — responses must be identical (one is a replay).
-      expect(winners[0].body).toEqual(winners[1].body);
-    } else {
-      // One 201, one other (409 expected for in-flight collision).
-      const others = [a, b].filter((r) => r.status !== 201);
-      expect(others).toHaveLength(1);
-      expect(others[0].status).toBe(409);
+  it('rejects an in-flight duplicate, then replays the completed response without another effect', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    inFlight = {
+      entered,
+      release: new Promise<void>((resolve) => { release = resolve; }),
+    };
+    const send = () => request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'concurrent-key')
+      .send({ amount: 777 })
+      .timeout({ deadline: 3000 });
+    const firstRequest = send().then((response) => response);
+    try {
+      await Promise.race([
+        waiting,
+        firstRequest.then(() => { throw new Error('Handler did not wait at the concurrency gate'); }),
+      ]);
+      const collision = await send();
+      expect(collision.status).toBe(409);
+      expect(collision.headers['idempotency-status']).toBe('conflict');
+      expect(callCounter.create).toBe(1);
+    } finally {
+      release();
+      inFlight = undefined;
+      await firstRequest;
     }
+    const first = await firstRequest;
+    expect(first.status).toBe(201);
+    expect(first.body).toEqual({ id: 'pay_1', kind: 'payment', amount: 777 });
+    expect(first.headers['idempotency-status']).toBe('created');
+    const replay = await send();
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(first.body);
+    expect(replay.headers['idempotency-status']).toBe('replayed');
+    expect(callCounter.create).toBe(1);
   });
 
   // P1 #2 regression, negative case: different body on the OTHER endpoint

@@ -255,6 +255,8 @@ describe.each(['Express', 'Fastify'] as const)(
         expect(otherRetry.status).toBe(201);
         expect(firstRetry.body).toEqual(first.body);
         expect(otherRetry.body).toEqual(other.body);
+        expect(firstRetry.headers['idempotency-status']).toBe('replayed');
+        expect(otherRetry.headers['idempotency-status']).toBe('replayed');
         expect(state.handlerCalls).toBe(2);
         expect(state.authChecks).toBe(4);
       },
@@ -296,6 +298,13 @@ describe.each(['Express', 'Fastify'] as const)(
       expect((await capture()).status).toBe(201);
       const mismatch = await capture('alice', undefined, undefined, 999);
       expect(mismatch.status).toBe(422);
+      expect(mismatch.headers['idempotency-status']).toBe('mismatch');
+      expect(state.handlerCalls).toBe(1);
+
+      const originalRetry = await capture();
+      expect(originalRetry.status).toBe(201);
+      expect(originalRetry.body).toMatchObject({ ...accounts.alice, amount: 100, sequence: 1 });
+      expect(originalRetry.headers['idempotency-status']).toBe('replayed');
       expect(state.handlerCalls).toBe(1);
 
       const differentUser = await capture('bob', undefined, undefined, 999);
@@ -349,6 +358,8 @@ describe.each(['Express', 'Fastify'] as const)(
           .set('Authorization', 'Bearer alice')
           .send({ amount: 100 });
         expect(result.status).toBe(201);
+        expect(result.body).toEqual({ sequence: i + 1 });
+        expect(result.headers['idempotency-replayed']).toBeUndefined();
       }
       expect(state.handlerCalls).toBe(2);
       expectStorageUntouched();

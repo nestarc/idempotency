@@ -6,6 +6,7 @@ const { RedisStorage } = require('@nestarc/idempotency/redis');
 const Redis = require('ioredis');
 const { assertAbsent, assertPublicPaths, bootAndSmoke, run } = require('./common/runtime.cjs');
 const { runRedisExamples } = require('./compiled/examples');
+const { verifyHttpStorageContract } = require('./compiled/common/http-contract');
 
 run(async () => {
   assertAbsent('pg', '@types/pg/package.json');
@@ -20,18 +21,34 @@ run(async () => {
   const client = new Redis(process.env.TEST_REDIS_URL, {
     lazyConnect: true,
     connectTimeout: 5000,
+    commandTimeout: 5000,
     maxRetriesPerRequest: 1,
     retryStrategy: () => null,
   });
   client.on('error', (error) => console.error(`Redis consumer: ${error.message}`));
+  const keyPrefix = `consumer-${randomUUID()}:`;
   try {
     await client.connect();
-    const keyPrefix = `consumer-${randomUUID()}:`;
     const storage = new RedisStorage({ client, keyPrefix });
     await bootAndSmoke(storage, 'redis');
+    await verifyHttpStorageContract(storage, 'redis');
     await runRedisExamples(client, keyPrefix, process.env.TEST_REDIS_URL);
   } finally {
-    if (client.status === 'ready') await client.quit();
-    else client.disconnect();
+    try {
+      if (client.status === 'ready') {
+        let cursor = '0';
+        do {
+          const [next, keys] = await client.scan(cursor, 'MATCH', `${keyPrefix}*`, 'COUNT', 100);
+          cursor = next;
+          if (keys.length) await client.del(...keys);
+        } while (cursor !== '0');
+      }
+    } finally {
+      try {
+        if (client.status === 'ready') await client.quit();
+      } finally {
+        client.disconnect();
+      }
+    }
   }
 });

@@ -84,6 +84,7 @@ async function verifyReadmeQuickstart(): Promise<void> {
     for (const expected of ['created', 'replayed']) {
       const response = await fetch(`${await app.getUrl()}/payments`, {
         method: 'POST',
+        signal: AbortSignal.timeout(5000),
         headers: {
           'content-type': 'application/json',
           'idempotency-key': 'demo-command-1',
@@ -141,6 +142,7 @@ async function verifyOtherInterceptorScopes(): Promise<void> {
       for (const expected of ['created', 'replayed']) {
         const response = await fetch(`${await app.getUrl()}/commands`, {
           method: 'POST',
+          signal: AbortSignal.timeout(5000),
           headers: { 'idempotency-key': 'command-123' },
         });
         assert.equal(response.status, 201);
@@ -156,6 +158,8 @@ async function verifyOtherInterceptorScopes(): Promise<void> {
 }
 
 export async function runMemoryExamples(): Promise<void> {
+  handlerCalls = 0;
+  verifiedSessions.set('Bearer alice', { tenantId: 'tenant-a', id: 'alice' });
   await verifyReadmeQuickstart();
   await verifyModuleRegistrations(new MemoryStorage());
   await verifyOtherInterceptorScopes();
@@ -192,6 +196,7 @@ export async function runMemoryExamples(): Promise<void> {
     const post = async (authorization: string, amount = 100) => {
       const response = await fetch(url, {
         method: 'POST',
+        signal: AbortSignal.timeout(5000),
         headers: {
           authorization,
           'content-type': 'application/json',
@@ -212,14 +217,22 @@ export async function runMemoryExamples(): Promise<void> {
     assert.equal(handlerCalls, 1);
     assert.equal((await post('Bearer alice', 101)).response.status, 422);
     assert.equal(handlerCalls, 1);
-    assert.equal((await post('Bearer bob')).response.status, 201);
-    assert.equal((await post('Bearer other-tenant')).response.status, 201);
+    for (const authorization of ['Bearer bob', 'Bearer other-tenant']) {
+      const isolated = await post(authorization);
+      assert.equal(isolated.response.status, 201);
+      assert.equal(isolated.response.headers.get('idempotency-status'), 'created');
+      assert.deepEqual(isolated.body, first.body);
+      const isolatedReplay = await post(authorization);
+      assert.equal(isolatedReplay.response.headers.get('idempotency-status'), 'replayed');
+      assert.equal(isolatedReplay.response.status, 201);
+      assert.deepEqual(isolatedReplay.body, isolated.body);
+    }
     assert.equal(handlerCalls, 3, 'both tenant and user dimensions isolate responses');
     verifiedSessions.delete('Bearer alice');
     assert.equal((await post('Bearer alice')).response.status, 401);
     assert.equal(handlerCalls, 3, 'revoked authentication rejects replay before the interceptor');
     assert.equal(counts.get('created'), 3);
-    assert.equal(counts.get('replayed'), 1);
+    assert.equal(counts.get('replayed'), 3);
     assert.equal(counts.get('mismatch'), 1);
   } finally {
     await app.close();

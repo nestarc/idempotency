@@ -124,6 +124,9 @@ async function main() {
               );
               await barrier('before-business-commit');
               await transaction.query('COMMIT');
+            } catch (error) {
+              await transaction.query('ROLLBACK');
+              throw error;
             } finally {
               transaction.release();
             }
@@ -152,6 +155,9 @@ async function main() {
 }
 
 void main().catch(async (error: unknown) => {
-  await send({ type: 'fatal', error: error instanceof Error ? error.stack : String(error) });
-  process.exit(1);
+  try {
+    await send({ type: 'fatal', error: error instanceof Error ? error.stack : String(error) });
+  } finally {
+    process.exit(1);
+  }
 });

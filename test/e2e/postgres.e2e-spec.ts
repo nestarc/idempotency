@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { INestApplication, Module, Controller, Post, Body } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
+import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import request from 'supertest';
 
@@ -9,11 +10,14 @@ import { IdempotencyInterceptor, IdempotencyModule, Idempotent } from '../../src
 import { PostgresStorage } from '../../src/postgres';
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (process.env.S5_REQUIRE_REAL_STORAGE === '1' && !DATABASE_URL) {
+  throw new Error('Postgres HTTP integration requires TEST_DATABASE_URL');
+}
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
 
-// Per-spec table isolation: jest runs spec files in parallel; each PG spec
-// uses its own table so TRUNCATEs cannot stomp on a sibling spec mid-test.
-const TABLE_NAME = 'idempotency_records_e2e';
+// Isolate separate Jest processes too: a fixed per-spec name is not sufficient.
+const TABLE_NAME = `idem_e2e_${randomUUID().replace(/-/g, '')}`;
+let inFlight: { entered: () => void; release: Promise<void> } | undefined;
 
 @Controller('payments')
 class PaymentsController {
@@ -21,8 +25,12 @@ class PaymentsController {
 
   @Post()
   @Idempotent()
-  charge(@Body() body: { amount: number }): { id: string; amount: number } {
+  async charge(@Body() body: { amount: number }): Promise<{ id: string; amount: number }> {
     PaymentsController.calls += 1;
+    if (inFlight) {
+      inFlight.entered();
+      await inFlight.release;
+    }
     return { id: `txn-${PaymentsController.calls}`, amount: body.amount };
   }
 }
@@ -32,13 +40,16 @@ describeOrSkip('PostgresStorage e2e', () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: DATABASE_URL });
+    pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });
     await PostgresStorage.createSchema(pool, TABLE_NAME);
   });
 
   afterAll(async () => {
-    await pool.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
-    await pool.end();
+    try {
+      await pool?.query(`DROP TABLE IF EXISTS "${TABLE_NAME}"`);
+    } finally {
+      await pool?.end();
+    }
   });
 
   beforeEach(async () => {
@@ -64,7 +75,7 @@ describeOrSkip('PostgresStorage e2e', () => {
   });
 
   afterEach(async () => {
-    await app.close();
+    await app?.close();
   });
 
   it('replays the cached response on repeat with the same key + body', async () => {
@@ -74,6 +85,10 @@ describeOrSkip('PostgresStorage e2e', () => {
       .send({ amount: 100 });
     expect(r1.status).toBe(201);
     expect(r1.body).toEqual({ id: 'txn-1', amount: 100 });
+    expect(r1.headers['idempotency-status']).toBe('created');
+    const persisted = await pool.query(`SELECT * FROM "${TABLE_NAME}"`);
+    expect(persisted.rows).toHaveLength(1);
+    expect(persisted.rows[0]).toMatchObject({ status: 'COMPLETED', response_code: 201 });
 
     const r2 = await request(app.getHttpServer())
       .post('/payments')
@@ -81,6 +96,9 @@ describeOrSkip('PostgresStorage e2e', () => {
       .send({ amount: 100 });
     expect(r2.status).toBe(201);
     expect(r2.body).toEqual({ id: 'txn-1', amount: 100 });
+    expect(r2.headers['idempotency-status']).toBe('replayed');
+    expect(r2.headers['idempotency-replayed']).toBe('true');
+    expect((await pool.query(`SELECT * FROM "${TABLE_NAME}"`)).rows).toEqual(persisted.rows);
 
     expect(PaymentsController.calls).toBe(1);
   });
@@ -97,26 +115,63 @@ describeOrSkip('PostgresStorage e2e', () => {
       .set('Idempotency-Key', 'k2')
       .send({ amount: 999 });
     expect(r2.status).toBe(422);
+    expect(r2.headers['idempotency-status']).toBe('mismatch');
+    const replay = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'k2')
+      .send({ amount: 100 });
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual({ id: 'txn-1', amount: 100 });
+    expect(replay.headers['idempotency-status']).toBe('replayed');
+    expect(PaymentsController.calls).toBe(1);
+    expect((await pool.query(`SELECT * FROM "${TABLE_NAME}"`)).rowCount).toBe(1);
   });
 
-  it('two concurrent requests result in exactly one handler execution', async () => {
-    const [r1, r2] = await Promise.all([
-      request(app.getHttpServer())
-        .post('/payments')
-        .set('Idempotency-Key', 'k3')
-        .send({ amount: 100 }),
-      request(app.getHttpServer())
-        .post('/payments')
-        .set('Idempotency-Key', 'k3')
-        .send({ amount: 100 }),
+  it('rejects an in-flight duplicate without altering its database owner, then replays', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    inFlight = {
+      entered,
+      release: new Promise<void>((resolve) => { release = resolve; }),
+    };
+    const send = () => request(app.getHttpServer())
+      .post('/payments')
+      .set('Idempotency-Key', 'k3')
+      .send({ amount: 100 })
+      .timeout({ deadline: 3000 });
+    const firstRequest = send().then((response) => response);
+    let owner: string | undefined;
+    try {
+      await Promise.race([
+        waiting,
+        firstRequest.then(() => { throw new Error('Handler did not wait at the concurrency gate'); }),
+      ]);
+      const before = await pool.query(`SELECT * FROM "${TABLE_NAME}"`);
+      expect(before.rows).toHaveLength(1);
+      expect(before.rows[0]).toMatchObject({ status: 'PROCESSING', response_code: null });
+      owner = before.rows[0].token;
+      const collision = await send();
+      expect(collision.status).toBe(409);
+      expect(collision.headers['idempotency-status']).toBe('conflict');
+      expect(PaymentsController.calls).toBe(1);
+      expect((await pool.query(`SELECT * FROM "${TABLE_NAME}"`)).rows).toEqual(before.rows);
+    } finally {
+      release();
+      inFlight = undefined;
+      await firstRequest;
+    }
+    const first = await firstRequest;
+    expect(first.status).toBe(201);
+    expect(first.body).toEqual({ id: 'txn-1', amount: 100 });
+    expect(first.headers['idempotency-status']).toBe('created');
+    expect((await pool.query(`SELECT status, token FROM "${TABLE_NAME}"`)).rows).toEqual([
+      { status: 'COMPLETED', token: owner },
     ]);
-
+    const replay = await send();
+    expect(replay.status).toBe(201);
+    expect(replay.body).toEqual(first.body);
+    expect(replay.headers['idempotency-status']).toBe('replayed');
     expect(PaymentsController.calls).toBe(1);
-    const statuses = [r1.status, r2.status].sort();
-    // Either both replayed, or one 201 + one 409.
-    expect(
-      JSON.stringify(statuses) === '[201,201]' ||
-        JSON.stringify(statuses) === '[201,409]',
-    ).toBe(true);
   });
 });

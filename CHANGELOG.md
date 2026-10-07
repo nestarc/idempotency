@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Strengthen tests with real concurrency gates, completion acknowledgement,
+  independent persisted-format fixtures, actual connection lifecycle and installed
+  tarball HTTP checks. Add selected mutation probes and require the complete test
+  inventory in the release gate. Keep benchmark timeout configuration and lifecycle
+  tests compatible with the minimum supported `@types/pg` 8.11 declarations.
 - Validate benchmark response status, payload, replay headers and handler execution
   before accepting latency samples. Isolate each run's Redis keys and PostgreSQL
   schema instead of truncating the default table, and fail on service or cleanup

@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { assertAbsent, assertPublicPaths, bootAndSmoke, run } = require('./common/runtime.cjs');
 const root = require('@nestarc/idempotency');
 const { runMemoryExamples } = require('./compiled/examples');
+const { verifyHttpStorageContract } = require('./compiled/common/http-contract');
 
 run(async () => {
   assertAbsent('pg', 'ioredis', '@types/pg/package.json');
@@ -22,5 +23,6 @@ run(async () => {
   );
   console.log('PASS adapter import is lazy and missing-driver constructors explain installation');
   await bootAndSmoke(new root.MemoryStorage(), 'memory');
+  await verifyHttpStorageContract(new root.MemoryStorage(), 'memory');
   await runMemoryExamples();
 });

@@ -10,9 +10,11 @@ import type { IdempotencyRecord } from '../../src/interfaces/idempotency-record.
 /**
  * Hand-rolled in-memory test double for `IdempotencyStorage`.
  *
- * Implements the same token-CAS semantics as `MemoryStorage` so the
- * interceptor tests exercise the real contract. Each method is wrapped in
- * `jest.fn(...)` so tests can assert call shapes. The `ledger` array records
+ * Programmable interceptor seam, not evidence that a production adapter
+ * satisfies the storage contract. Tests can inject corrupt records and failures
+ * here; actual Memory/Redis/Postgres behavior is verified by the shared contract
+ * against those implementations. Each method is wrapped in `jest.fn(...)` so
+ * tests can assert call shapes. The `ledger` array records
  * every method invocation in order, which is essential for the interceptor's
  * "complete-before-emit" race condition test.
  */

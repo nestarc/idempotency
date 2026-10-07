@@ -65,8 +65,12 @@ async function startChild(config: FailureChildConfig, expected: 'barrier' | 'res
     output += chunk.toString();
   });
   const messages: ChildMessage[] = [];
+  // Covers both a child that never reaches IPC and a child that reports a result
+  // but leaks a connection instead of exiting. Jest's timeout alone leaves it live.
+  const lifetime = setTimeout(() => child.kill('SIGKILL'), 25_000);
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once('exit', (code, signal) => {
+      clearTimeout(lifetime);
       activeChildren.delete(child);
       resolve({ code, signal });
     });
@@ -101,6 +105,9 @@ async function startChild(config: FailureChildConfig, expected: 'barrier' | 'res
 async function request(config: FailureChildConfig): Promise<FailureClientResult> {
   const process = await startChild(config, 'result');
   expect(await process.exited).toEqual({ code: 0, signal: null });
+  expect(Number.isInteger(process.message.result?.status)).toBe(true);
+  // IPC values come from Node's realm, so use the realm-independent array guard.
+  expect(Array.isArray(process.message.result?.events)).toBe(true);
   return process.message.result!;
 }
 
@@ -236,7 +243,7 @@ describeReal.each<FailureBackend>(['redis', 'postgres'])(
           crashPoint === 'after-complete' ? 'COMPLETED' : 'PROCESSING',
         );
 
-        original.child.kill('SIGKILL');
+        expect(original.child.kill('SIGKILL')).toBe(true);
         const exit = await original.exited;
         expect(exit).toEqual({ code: null, signal: 'SIGKILL' });
         expect(original.messages.some((message) => message.type === 'result')).toBe(false);
@@ -249,6 +256,9 @@ describeReal.each<FailureBackend>(['redis', 'postgres'])(
         expect(beforeExpiry.idempotencyStatus).toBe(
           crashPoint === 'after-complete' ? 'replayed' : 'conflict',
         );
+        expect(beforeExpiry.events).toEqual([
+          crashPoint === 'after-complete' ? 'replayed' : 'conflict',
+        ]);
         if (crashPoint === 'after-complete') {
           expect(beforeExpiry.body).toEqual({ charged: true, operationId: rawKey });
         }
@@ -315,7 +325,7 @@ describeReal.each<FailureBackend>(['redis', 'postgres'])(
           idempotencyStatus: 'complete_error',
           body: { charged: true, operationId: rawKey },
         });
-        expect(originalClient.events.filter((event) => event === 'complete_error')).toHaveLength(1);
+        expect(originalClient.events).toEqual(['complete_error']);
         const afterOriginal = await snapshot(rawKey);
         expect(afterOriginal).toMatchObject({ handlerExecutions: 1, committedEffects: 1 });
         expect(afterOriginal.record?.status).toBe(
@@ -327,6 +337,9 @@ describeReal.each<FailureBackend>(['redis', 'postgres'])(
         expect(beforeExpiry.idempotencyStatus).toBe(
           completeFailure === 'applied-write-rejection' ? 'replayed' : 'conflict',
         );
+        expect(beforeExpiry.events).toEqual([
+          completeFailure === 'applied-write-rejection' ? 'replayed' : 'conflict',
+        ]);
         if (completeFailure === 'applied-write-rejection') {
           expect(beforeExpiry.body).toEqual(originalClient.body);
         }
@@ -334,7 +347,12 @@ describeReal.each<FailureBackend>(['redis', 'postgres'])(
 
         await expire(rawKey);
         const afterExpiry = await request(config);
-        expect(afterExpiry).toMatchObject({ status: 201, idempotencyStatus: 'created' });
+        expect(afterExpiry).toEqual({
+          status: 201,
+          idempotencyStatus: 'created',
+          body: { charged: true, operationId: rawKey },
+          events: ['created'],
+        });
         const finalState = await snapshot(rawKey);
         expect(finalState).toMatchObject({
           handlerExecutions: 2,

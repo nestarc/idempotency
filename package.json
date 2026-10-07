@@ -78,7 +78,8 @@
     "release:validate": "node scripts/release-validation.mjs validate",
     "release:verify": "node scripts/release-validation.mjs verify-artifact",
     "release:matrix": "node scripts/release-validation.mjs verify-matrix",
-    "test:release-gates": "node --test test/release/*.test.mjs"
+    "test:release-gates": "node --test test/release/*.test.mjs",
+    "test:mutations": "node test/mutation/run.mjs"
   },
   "peerDependencies": {
     "@nestjs/common": "^10.0.0 || ^11.0.0",

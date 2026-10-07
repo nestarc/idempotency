@@ -168,6 +168,12 @@ describe('MemoryStorage', () => {
       const record = await storage.get('k1');
       expect(record).not.toBeNull();
       expect(record!.status).toBe('COMPLETED');
+      expect(jest.getTimerCount()).toBe(1);
+      jest.advanceTimersByTime(49_000);
+      await expect(storage.get('k1')).resolves.not.toBeNull();
+      jest.advanceTimersByTime(1_000);
+      expect(jest.getTimerCount()).toBe(0);
+      await expect(storage.get('k1')).resolves.toBeNull();
     });
   });
 
@@ -179,6 +185,9 @@ describe('MemoryStorage', () => {
       expect(jest.getTimerCount()).toBeGreaterThanOrEqual(3);
       await storage.onModuleDestroy();
       expect(jest.getTimerCount()).toBe(0);
+      await expect(storage.get('a')).resolves.toBeNull();
+      await expect(storage.get('b')).resolves.toBeNull();
+      await expect(storage.get('c')).resolves.toBeNull();
     });
   });
 });

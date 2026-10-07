@@ -5,6 +5,7 @@
  * at expiresAt <= now, and only a live PROCESSING owner can complete once.
  * The exact boundary tests deliberately do not run timers or sweep rows first.
  */
+import { randomUUID } from 'node:crypto';
 import RedisMock from 'ioredis-mock';
 import type Redis from 'ioredis';
 import { Pool, type PoolClient } from 'pg';
@@ -88,7 +89,16 @@ describe('REGRESSION: Redis complete-once CAS', () => {
       expect(results.filter((result) => result === 'ok')).toHaveLength(1);
       expect(results.filter((result) => result === 'stale')).toHaveLength(1);
       const record = await storage.get('key');
-      expect(record!.responseBody).toBe(results[0] === 'ok' ? 'one' : 'two');
+      expect(record).toMatchObject({
+        token,
+        status: 'COMPLETED',
+        statusCode: results[0] === 'ok' ? 201 : 202,
+        responseBody: results[0] === 'ok' ? 'one' : 'two',
+      });
+      const retention = await client.ttl('regression:s5:repeat:key');
+      const expectedTtl = results[0] === 'ok' ? 60 : 3600;
+      expect(retention).toBeGreaterThan(expectedTtl - 5);
+      expect(retention).toBeLessThanOrEqual(expectedTtl);
     } finally {
       await client.del('regression:s5:repeat:key');
       await client.quit();
@@ -99,19 +109,26 @@ describe('REGRESSION: Redis complete-once CAS', () => {
 const describePostgres = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 
 describePostgres('REGRESSION: Postgres exact lease boundary without sweep', () => {
-  const tableName = 'idempotency_s5_lifecycle_regression';
+  const tableName = `test_pg_boundary_${randomUUID().replace(/-/g, '')}`;
   let pool: Pool;
   let client: PoolClient;
   let storage: PostgresStorage;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+    pool = new Pool({
+      connectionString: process.env.TEST_DATABASE_URL,
+      connectionTimeoutMillis: 5_000,
+      query_timeout: 10_000,
+    });
     await PostgresStorage.createSchema(pool, tableName);
   });
 
   afterAll(async () => {
-    await pool.query(`DROP TABLE IF EXISTS "${tableName}"`);
-    await pool.end();
+    try {
+      await pool.query(`DROP TABLE IF EXISTS "${tableName}"`);
+    } finally {
+      await pool.end();
+    }
   });
 
   beforeEach(async () => {
@@ -122,8 +139,12 @@ describePostgres('REGRESSION: Postgres exact lease boundary without sweep', () =
   });
 
   afterEach(async () => {
-    await client.query('ROLLBACK');
-    client.release();
+    if (!client) return;
+    try {
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
   });
 
   const expire = async (key: string) => {

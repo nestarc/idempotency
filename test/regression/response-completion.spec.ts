@@ -15,15 +15,20 @@ import { EMPTY, Observable, Subject, firstValueFrom, lastValueFrom, of } from 'r
 import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { IDEMPOTENT_METADATA_KEY } from '../../src/idempotency.constants';
 import { encodeReplayBody } from '../../src/utils/replay-body';
-import { FakeStorage } from '../support/fake-storage';
+import { MemoryStorage } from '../../src/storage/memory.storage';
 import { globalRequestKey } from '../support/request-key';
 import { buildCallHandler, buildExecutionContext } from '../support/execution-context.factory';
 
 const KEY = 'response-completion';
 const STORAGE_KEY = globalRequestKey(KEY);
 
+const activeStorages: MemoryStorage[] = [];
+
 const buildHarness = () => {
-  const storage = new FakeStorage();
+  const storage = new MemoryStorage();
+  activeStorages.push(storage);
+  jest.spyOn(storage, 'complete');
+  jest.spyOn(storage, 'delete');
   const interceptor = new IdempotencyInterceptor(new Reflector(), storage, {
     storage,
     ttl: 60,
@@ -62,6 +67,69 @@ const controlledHandler = () => {
 };
 
 describe('REGRESSION: HTTP response is captured on successful completion', () => {
+  afterEach(async () => {
+    await Promise.all(activeStorages.splice(0).map((storage) => storage.onModuleDestroy()));
+  });
+
+  it('publishes success only after the real storage completion becomes visible to retries', async () => {
+    const { storage, interceptor, context } = buildHarness();
+    const persist = MemoryStorage.prototype.complete.bind(storage);
+    let markStarted!: () => void;
+    let releaseCompletion!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    jest.spyOn(storage, 'complete').mockImplementationOnce(async (...args) => {
+      markStarted();
+      await released;
+      return persist(...args);
+    });
+    const emissions: unknown[] = [];
+    const original = { id: 'order-1' };
+    const next = buildCallHandler(of(original));
+    let resolveResponse!: () => void;
+    let rejectResponse!: (error: unknown) => void;
+    const response = new Promise<void>((resolve, reject) => {
+      resolveResponse = resolve;
+      rejectResponse = reject;
+    });
+    const subscription = interceptor.intercept(context(), next).subscribe({
+      next: (value) => emissions.push(value),
+      error: rejectResponse,
+      complete: resolveResponse,
+    });
+
+    try {
+      await started;
+      expect(emissions).toEqual([]);
+      expect(await storage.get(STORAGE_KEY)).toMatchObject({ status: 'PROCESSING' });
+      const inFlightRetry = buildCallHandler(of({ duplicate: true }));
+      await expect(
+        firstValueFrom(interceptor.intercept(context(), inFlightRetry)),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(inFlightRetry.handleSpy).not.toHaveBeenCalled();
+
+      releaseCompletion();
+      await response;
+      expect(emissions).toEqual([original]);
+      expect(await storage.get(STORAGE_KEY)).toMatchObject({ status: 'COMPLETED' });
+      const completedRetry = buildCallHandler(of({ duplicate: true }));
+      await expect(
+        firstValueFrom(interceptor.intercept(context(), completedRetry)),
+      ).resolves.toEqual(original);
+      expect(completedRetry.handleSpy).not.toHaveBeenCalled();
+      expect(next.handleSpy).toHaveBeenCalledTimes(1);
+      expect(storage.complete).toHaveBeenCalledTimes(1);
+      expect(storage.delete).not.toHaveBeenCalled();
+    } finally {
+      releaseCompletion();
+      subscription.unsubscribe();
+    }
+  });
+
   it('keeps intermediate values private and rejects retries while the source remains open', async () => {
     const { storage, interceptor, context } = buildHarness();
     const { source, subscribed, next } = controlledHandler();

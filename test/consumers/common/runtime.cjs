@@ -34,15 +34,30 @@ async function storageSmoke(storage, label) {
   let token;
   try {
     assert.equal(await storage.get(key), null);
-    const created = await storage.create(key, 'consumer-fingerprint', 60);
-    assert.equal(created.acquired, true);
-    assert.equal(typeof created.token, 'string');
-    token = created.token;
+    const attempts = await Promise.all(
+      Array.from({ length: 8 }, () => storage.create(key, 'consumer-fingerprint', 60)),
+    );
+    const winners = attempts.filter((attempt) => attempt.acquired);
+    assert.equal(winners.length, 1, `${label}: concurrent NX create must have one owner`);
+    token = winners[0].token;
+    assert.equal(typeof token, 'string');
+    assert.ok(token.length > 0);
+    for (const loser of attempts.filter((attempt) => !attempt.acquired)) {
+      assert.equal(loser.token, undefined, 'a losing creator must not receive ownership');
+    }
     const processing = await storage.get(key);
     assert.equal(processing.status, 'PROCESSING');
     assert.equal(processing.token, token);
     assert.equal(processing.fingerprint, 'consumer-fingerprint');
-    assert.equal((await storage.create(key, 'consumer-fingerprint', 60)).acquired, false);
+    assert.equal((await storage.create(key, 'changed-fingerprint', 60)).acquired, false);
+    const staleToken = randomUUID();
+    assert.notEqual(staleToken, token, 'stale-owner probe must use a different valid UUID');
+    assert.equal(
+      await storage.complete(key, staleToken, { statusCode: 500, body: 'wrong owner' }, 60),
+      'stale',
+    );
+    assert.equal(await storage.delete(key, staleToken), 'stale');
+    assert.deepEqual(await storage.get(key), processing, 'stale callers cannot mutate the owner');
     const createdAt = processing.createdAt.getTime();
     const body = '{"consumer":"opaque response"}';
     const headers = { 'content-type': 'application/json' };
@@ -53,9 +68,20 @@ async function storageSmoke(storage, label) {
     assert.equal(completed.responseBody, body);
     assert.deepEqual(completed.responseHeaders, headers);
     assert.equal(completed.createdAt.getTime(), createdAt);
+    assert.equal(
+      await storage.complete(key, token, { statusCode: 202, body: 'overwrite' }, 120),
+      'stale',
+    );
+    assert.deepEqual(await storage.get(key), completed, 'complete-once preserves response and TTL');
+    await assert.rejects(storage.complete(key, token, { statusCode: 500 }, 0), RangeError);
+    assert.deepEqual(
+      await storage.get(key),
+      completed,
+      'invalid TTL cannot mutate a completed record',
+    );
     assert.equal(await storage.delete(key, token), 'ok');
     assert.equal(await storage.get(key), null);
-    console.log(`PASS ${label} create/get/complete/delete`);
+    console.log(`PASS ${label} concurrent NX/ownership/complete-once/TTL/create/get/delete`);
   } finally {
     if (token) await storage.delete(key, token);
   }
