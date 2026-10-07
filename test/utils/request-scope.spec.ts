@@ -26,6 +26,12 @@ describe('request scope utilities', () => {
       expect(extractActualRequestPath(undefined)).toBeUndefined();
       expect(extractActualRequestPath({})).toBeUndefined();
     });
+
+    it('preserves duplicate/trailing slashes and escaped path parameters', () => {
+      expect(extractActualRequestPath({ url: '/orders//a%2Fb/?v=1' })).toBe(
+        '/orders//a%2Fb/',
+      );
+    });
   });
 
   describe('normalizeHttpPath', () => {

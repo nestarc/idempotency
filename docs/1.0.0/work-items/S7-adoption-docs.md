@@ -58,6 +58,37 @@ npm run build
 
 ## 다음 작업자에게
 
+### S3 / D07 전환 인수인계 (2026-10-07)
+
+[D03](../decisions.md#d03--요청-격리와-키-입력-decided)이 확정됐다. 함수형 scope는
+`string | readonly string[]` identity를 method + 실제 path에 **추가**한다. tenant/user는
+배열로 경계를 보존하고 guard에서 검증된 값을 사용한다. 기본 endpoint는 identity를 추론하지 않는다.
+global은 저장소 전체 응답 공유이며 여러 인증 주체를 자동 격리하지 않는다.
+실제 path의 중복/끝 slash와 percent encoding은 보존하며 query 제외는 유지한다.
+
+header는 raw string 프로파일이다. Structured Field 파싱을 하지 않으므로 인용부호는 literal이고,
+반복/배열/쉼표/빈 값/공백뿐/제어문자/단독 surrogate는400이다. resolver는 header를 대체하고
+쉼표만 예외적으로 허용한다. required:false도 invalid는400, undefined만 bypass한다.
+maxKeyLength는 UTF-8 bytes(기본255), 양의 safe integer이며 잘못된 설정은500이다.
+README scope/key/webhook 및 CHANGELOG를 갱신했고 양 adapter에서 guard와 rawBody HMAC 검증을
+실행했다. 전체 도입 recipe와 provider별 서명 구현은 S7에서 완성한다.
+
+D07이 포함할 필수 전환 사례:
+
+| 사례 | S3에서 확인한 결과 / S7 행동 |
+| --- | --- |
+| 옛 endpoint/custom/global alias만 존재 | 새 key는 alias를 조회하지 않아 handler가 다시 실행된다. durable 업무 ID 중복 방지 또는 결과 조정 필수 |
+| 옛 global raw key가 새 v1 address와 정확히 같음 | prefix는 출처 증명이 아니다. 0.4 body면409지만 S1-compatible body면 재생될 수 있음. 같은 저장 namespace의 구/신 key 공존 미지원 |
+| 별도의 빈 저장 namespace로 전환 | 옛 응답 혼입을 차단한다. 새 MemoryStorage, 검증된 빈 Redis keyPrefix, 새 PG tableName/별도 DB 사용. Redis prefix가 옛 prefix의 하위라는 이유만으로 격리를 가정하지 않음 |
+| old/new writer 동시 동작 | 서로 다른 잠금으로 같은 업무 재실행 가능. rolling 배포 미지원, 트래픽 중단과 전체 교체 필요 |
+| 처리 결과 불명 / 배포 후 rollback | 업무 결과를 확인하고 양 버전에서 처리한 command ID를 중복 실행하지 못하게 해야 함. TTL 만료나 prefix 회전만으로 해결하지 않음 |
+
+namespace 분리와 업무 중복 방지는 별도의 필수 조건이다. traffic pause→drain/업무 결과 확인→
+업무 중복 방지→빈 namespace 확인→전체 교체→재개 순서를 포함한다. 조건을 충족할 수 없으면
+기존 재전송을 차단하고 불명 업무를 해소할 때까지 전환하지 않는다. D01 body 전환 조건도 적용한다.
+키가 바뀌지만 SQL schema/adapter 계약 변경은 없다. D07 전체 상태는 S5/S6 인계까지 OPEN으로 유지한다.
+
+
 ### S2 인수인계 (2026-10-06)
 
 [D02](../decisions.md#d02--선택-의존성과-공개-import-경계-decided)는 확정됐다. root는 Memory/common만 제공한다.
@@ -85,6 +116,6 @@ legacy/corrupt COMPLETED도409이며 새 body는 opaque string이다. 키/schema
 
 - 마지막 갱신: 2026-10-06. S7 자체 구현·예제 검증 미착수. S1·S2의 README/CHANGELOG 계약 갱신은 위 인계 참조.
 - 다음 행동: README sweep 블록을 소비자 TestModule로 재현하고 필요한 provider와 실제 소유한 Pool이 같은지 확인한다.
-- 미결: D07 및 선행 D03~D06. D01·D02는 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
+- 미결: D07 및 선행 D04~D06. D01·D02·D03은 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
 - 인계 대상: S8에 실행 예제 목록, 공식 import/지원 구성, 업그레이드·롤백 테스트와 남은 제한을 전달한다.
 - 검증 기록: 대상 commit/artifact, 환경, 명령, pass/fail/skip, 증거와 남은 제한을 실행 후 기록한다.

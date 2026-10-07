@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve endpoint isolation when a custom scope returns only a tenant identity.
+  Encode component boundaries before hashing to prevent `::` key/path collisions.
+- Reject invalid or repeated header keys and non-string resolver results before
+  fingerprinting, storage access or handler execution, including optional routes.
+
 - Memory-only imports and strict declaration checking no longer require pg,
   ioredis or @types/pg. Optional drivers load when constructing an owned
   connection, with an actionable installation error when absent.
@@ -24,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking key/scope transition for 1.0:** function scopes add a string or
+  readonly array of identity components to the endpoint. Every scope mode uses
+  a versioned SHA-256 storage key. Actual path slashes are preserved. Old keys
+  have no fallback lookup. Migration requires a separate empty storage namespace;
+  migration and rollback also require durable business deduplication
+  or reconciliation of past retries, in addition to stopping old/new overlap.
+- `maxKeyLength` now counts UTF-8 bytes and requires a positive safe integer.
+  Header strings remain raw (quotes are literal); repeated/comma-joined fields
+  are rejected. No database schema change.
+
 - **Breaking import transition for 1.0:** RedisStorage/RedisStorageOptions now
   use `@nestarc/idempotency/redis`; PostgresStorage/PostgresStorageOptions and
   PostgresSweepService/SweepOptions use `@nestarc/idempotency/postgres`. Internal
@@ -37,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opaque string, including empty responses. Legacy/corrupt records return 409
   without re-execution. Custom adapters must preserve payloads unchanged.
   Old/new readers and writers must not overlap during deployment or rollback;
-  follow the README upgrade procedure. No key or database schema change.
+  follow the combined S1/S3 README upgrade procedure. This response-body change
+  itself does not alter keys; the S3 key transition above does. No schema change.
 - Added class-transformer 0.5.1 as a development dependency for Express/Fastify
   serialization regression tests. No new runtime dependency or public export.
 

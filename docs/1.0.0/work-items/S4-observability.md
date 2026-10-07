@@ -48,6 +48,19 @@ npx tsc --noEmit --incremental false -p tsconfig.json
 
 ## 다음 작업자에게
 
+### S3 인수인계 (2026-10-07)
+
+[D03](../decisions.md#d03--요청-격리와-키-입력-decided)의 v1 키는 JSON tuple의 SHA-256이다.
+`src/utils/request-key.ts`의 `createRequestKey(namespaceTuple, rawKey)`가 `{ key, namespace }`를 반환한다.
+`namespace`는 raw key 없이 identity + endpoint tuple만 hash하며 key 변경에도 동일하다.
+별도 `test/utils/request-key.spec.ts`가 이 독립성과 wire format을 고정한다.
+현재 interceptor는 `.key`만 사용하고 event.scope 및 fingerprint input.scope도 그 저장 key를 받는다.
+S4는 request 처리 경로에 namespace를 별도로 전달하거나 더 제한된 route 표현을 선택해 D04를 확정한다.
+키 hash는 인코딩 변경으로 이전 값과 달라진다. 현재 key가 hash라도 원본 오류 객체/메시지의 노출은 해결되지 않았다.
+identity·동적 path의 hash는 암호화가 아니고 추측 및 cardinality 위험이 남는다.
+관측 전체 마스킹과 오류 경로는 S4/S5 작업이며 S3 완료를 S4 완료로 간주하지 않는다.
+
+
 - 마지막 갱신: 2026-10-06. 구현 미착수, 새 검증 증거 없음.
 - 다음 행동: `test/regression/`에 전체 event JSON과 Logger spy의 원본 키 포함 여부를 검증하는 회귀를 추가하고 기존 onEvent 테스트도 보강한다.
 - 미결: D04. namespace 표현은 S3와 맞추고 오류 분기는 S5의 최종 변경 뒤 재검증한다.

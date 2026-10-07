@@ -60,7 +60,8 @@ export function consumerOptions(storage: IdempotencyStorage): IdempotencyOptions
       outcomes.push(event.outcome);
     },
   };
-  const scope: IdempotencyScope = (context) => context.getClass().name;
+  const scope: IdempotencyScope = (context) =>
+    [context.getClass().name, context.getHandler().name] as const;
   const replayHeaders: ReplayHeadersOption = ['content-type'];
   const options: IdempotencyOptions = {
     storage,

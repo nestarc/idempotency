@@ -6,22 +6,28 @@ import type { IdempotencyStorage } from './idempotency-storage.interface';
  *
  * - `'endpoint'` (default) — scope by actual HTTP method + request path when
  *   available, falling back to Nest route metadata and then controller class +
- *   handler method name. Two different endpoints using the SAME
+ *   handler method name. Actual path parameters, duplicate/trailing slashes
+ *   and percent encoding are preserved; query strings are excluded.
+ *   No authenticated identity is inferred. Two different endpoints using the SAME
  *   `Idempotency-Key` value will NOT collide. Matches the IETF draft
  *   recommendation that the key be unique per (key, request URI) tuple.
  *
- * - `'global'` — legacy behavior: use the raw header value as the storage
- *   key with no namespace. Safe only if clients guarantee globally-unique
- *   keys across all endpoints (e.g. fresh UUIDs per request).
+ * - `'global'` — share keys across all identities and endpoints in the storage.
+ *   Only use when all callers are authorized to share every replayed response.
+ *   Storage keys are still versioned and encoded.
  *
- * - A function `(ctx) => string` — fully custom scoping. Useful in
- *   multi-tenant systems where the scope should include the tenant ID.
- *   The returned string will be combined with the raw header value.
+ * - A synchronous function — ADD authenticated identity to the endpoint.
+ *   Return a nonblank string or a nonempty array of nonblank strings, e.g.
+ *   `[req.user.tenantId, req.user.id]`. Array boundaries are preserved.
+ *   Guards must authenticate/authorize before this interceptor on every retry.
+ *   Unlike 0.4, functions never replace the endpoint. All modes use the v1
+ *   key encoding with no legacy alias lookup. Upgrades require a separate empty
+ *   storage namespace and business deduplication; see the migration contract.
  */
 export type IdempotencyScope =
   | 'endpoint'
   | 'global'
-  | ((context: ExecutionContext) => string);
+  | ((context: ExecutionContext) => string | readonly string[]);
 
 export type ReplayHeadersOption = boolean | string[];
 
@@ -106,8 +112,9 @@ export interface IdempotencyOptions {
   processingTtl?: number;
 
   /**
-   * The HTTP header name carrying the idempotency key. Override only if you
-   * need to deviate from the IETF draft default.
+   * The HTTP header name carrying one raw opaque key string. Repeated fields,
+   * arrays and comma-joined values are rejected. Quotes are literal; this is
+   * not a Structured Field String parser.
    *
    * @default 'Idempotency-Key'
    */
@@ -115,12 +122,16 @@ export interface IdempotencyOptions {
 
   /**
    * Optional application-level idempotency key resolver. When configured, its
-   * return value is used instead of reading the configured header.
+   * return value is used instead of reading the configured header. Only
+   * undefined means missing. Invalid strings/non-string results produce 400
+   * even when required:false. Commas are allowed in resolver keys.
    */
   keyResolver?: IdempotencyKeyResolver;
 
   /**
-   * Maximum accepted idempotency key length, in characters.
+   * Maximum accepted idempotency key length, in UTF-8 bytes. Must be a positive
+   * safe integer. Empty/blank strings, controls and unpaired surrogates are
+   * rejected. Strings are not trimmed or Unicode-normalized by this package.
    *
    * @default 255
    */

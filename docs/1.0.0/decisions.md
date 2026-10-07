@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01·D02를 결정해 S1·S2에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01·D02·D03을 결정해 S1·S2·S3에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -16,7 +16,7 @@
 | --- | --- | --- | --- | --- |
 | D01 | DECIDED | S1 | 최외곽 idempotency에서 최종 plain JSON 저장, 마지막 정상 emission, 버전 표식, 미지원 lease 유지/사전 거부 | 자세한 계약과 전환 조건은 아래 D01 및 S1 문서 |
 | D02 | DECIDED | S2 | Memory/common root, Redis·PG 공식 subpath 분리; PG 타입은 소비자가 설치 | 0.4 root DB import를 /redis·/postgres로 이동; TS5.7.3 CJS node/node16/nodenext |
-| D03 | OPEN | S3 | 인증된 identity와 endpoint 조합, 모호하지 않은 key 형식, header/resolver 입력 계약 | global/custom scope 의미, query 제외, 중복·빈 헤더, 문자열 길이, legacy record와 혼합 버전 |
+| D03 | DECIDED | S3 | 함수형 scope의 identity + endpoint 합성, JSON tuple SHA-256 key v1, raw string/UTF-8 입력 계약 | 기존 키 재사용·혼합 배포 불가; 아래 D03의 업무 중복 방지 전환 전제 필수 |
 | D04 | OPEN | S4 | event namespace·keyHash·오류 정보·로그 마스킹 계약 | raw key/인증 정보/동적 경로의 노출, 기존 event 소비자, metric cardinality, callback 실패 |
 | D05 | OPEN | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
 | D06 | OPEN | S6 | create/complete/delete의 만료 경계와 반복 complete, 긴 TTL 정책 | Memory/Redis/PG 동일 동작, stale token, custom adapter 변경, schema 필요 여부 |
@@ -50,6 +50,9 @@
 
 ## D01 — 응답 재생 경계 (DECIDED)
 
+S1 당시의 키 유지·같은 저장소 전환 기록은 이후 D03의 키 변경으로 대체된다. 최종 업그레이드에는
+D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 함께 적용한다.
+
 - 날짜/결정자: 2026-10-06, Codex. 사용자 S1 구현 요청 범위에서 결정.
 - 기준: `9610774`, Nest 11.1.18 실제 HTTP 재현, `class-transformer@0.5.1`.
 - 계약: idempotency가 응답 변환 interceptor의 바깥쪽이어야 한다. 등록 순서는 `IdempotencyInterceptor` 다음 `ClassSerializerInterceptor`. 처음에는 직렬화가 먼저 끝나고, replay에서는 안쪽 변환을 재실행하지 않는다. 전역 serializer 바깥에 메서드 idempotency를 두는 구성은 지원하지 않는다.
@@ -76,3 +79,31 @@
 - 호환성: 0.4의 root DB import 및 내부 경로 사용자는 새 subpath로 소스를 변경해야 한다. Memory·공통 API의 root 경로는 유지한다. 키/schema/저장 형식/어댑터 처리 정책은 S2에서 변경하지 않는다. S1 데이터 전환 규칙은 별도로 적용한다. root DB 재export shim은 타입 의존성 누출을 다시 만들므로 제공하지 않는다.
 - 검증: 실제 tarball의 격리 Memory/Redis/PG fixture, PG 타입 미설치 음성 검사, 선택 driver 누락 검사, 공개 타입 컴파일, Nest 생성/init/close, 실제 DB create/get/complete/delete 및 포장 파일 검사를 S2 기록에 남긴다. adapter 동작 계약은 변경하지 않았으므로 공통 storage 계약은 유지하고 기존 전체 suite로 검증한다.
 - 후속: S7은 import/설치 전환과 예제를 이 결정에 맞추며 sweep DI 문제를 별도로 마무리한다. S8은 같은 fixture와 검증한 tarball·checksum을 재사용하고 최종 matrix 및 artifact 게시 연결을 구현한다.
+
+## D03 — 요청 격리와 키 입력 (DECIDED)
+
+- 날짜/결정자: 2026-10-07, Codex. 사용자 S3 구현 요청 범위에서 결정. 기준 `e2b9cec673acea9726fddc22dcdc2167283d3ead`.
+- scope: 기본 `endpoint`는 method와 실제 path를 포함하며 identity를 추론하지 않는다. 함수형 scope는 인증된 identity를 반환하고 **항상 endpoint에 추가**한다. 기존 string 반환은 한 구성요소이며, 새 `readonly string[]` 반환으로 tenant/user 등의 경계를 보존한다. 빈 문자열·공백뿐인 값·빈 배열·비문자열 구성요소·비동기 반환은 configuration error다. `global`은 명시적으로 identity·endpoint를 제외한 저장소 전체 공유다. 인증 주체가 여럿인 서비스에서 사용하지 않는다.
+- 대안: 완전 교체형 custom scope를 유지하고 별도 옵션을 추가하면 기존 tenant-only 예제가 계속 endpoint를 누락한다. 1.0에서는 함수 의미를 합성으로 바꾸어 이 원인을 제거한다. endpoint 제거가 꼭 필요한 서비스는 global의 공유 권한 전제를 직접 입증해야 한다.
+- endpoint: Express `originalUrl`, Fastify `url`의 실제 path를 사용한다. method는 대문자이며 path parameter, percent encoding, 중복/끝 slash를 그대로 구분한다. 라우터가 다른 리소스로 처리할 수 있는 slash를 임의로 합치지 않는다. query는 기존대로 제외한다. 순서·추적 파라미터 변화가 중복 실행을 만들지 않도록 유지하며, 의미 있는 query는 scope 배열에 선택한 값을 안정된 순서로 추가하거나 fingerprint에 넣어422로 구분한다. 실제 URL이 없는 custom context만 metadata path, 마지막으로 class/handler 이름에 fallback한다. fallback은 실제 HTTP path의 격리를 대신하지 못한다.
+- 키: namespace tuple은 `['global']` 또는 `['endpoint', identityParts, locationParts]`. location은 `['path', METHOD, actualPath]`, `['route', METHOD, metadataPath]`, `['handler', METHOD, className, handlerName]` 중 하나다. 저장 key는 `@nestarc/idempotency:key:v1:` + `SHA256(UTF8(JSON.stringify([namespaceTuple, rawKey])))`의 소문자 hex다. 문자열 구분자 연결이 아닌 JSON 배열 인코딩이 구성요소 경계를 보존하며, 고정 길이 hash는 긴 URL로 인한 저장소 index 길이 문제도 피한다. hash의 암호학적 충돌 한계는 남는다. SQL schema와 adapter 계약은 바꾸지 않는다.
+- 원본 키 없는 namespace: 내부 `createRequestKey()`가 별도로 `@nestarc/idempotency:namespace:v1:` + `SHA256(JSON.stringify(namespaceTuple))`를 반환한다. S4가 event/log 계약에 연결한다. hash는 암호화가 아니며 저엔트로피 identity 추측이나 cardinality 문제를 해결하지 않는다. 기존 fingerprint input.scope와 event.scope는 이번에는 새 저장 key를 받는다. D04에서 공개 관측 의미를 최종 확정한다.
+- 입력: header는 raw opaque string이다. Structured Field 인용·escape를 해석하지 않아 `K`와 `"K"`는 다른 키다. 누락은 undefined만 해당한다. 빈 값·공백뿐인 값·비문자열·C0/C1 제어문자·단독 surrogate·header 배열·반복 header field·쉼표가 있는 header는400이다. rawHeaders(Express 또는 Fastify raw)에서 대소문자와 무관하게 반복을 검사한다. 프록시에서 합쳐진 쉼표도 거부하지만 upstream이 이미 버린 중복 정보는 복구할 수 없다. trim/case fold/Unicode 정규화는 하지 않는다(HTTP parser의 OWS 처리는 별개).
+- resolver: header를 완전히 대체하고 동기/비동기 string 또는 undefined만 허용한다. 위 문자열 검증·길이 제한은 같으며 쉼표는 허용한다. undefined + required:false만 bypass하고 invalid input은 optional이어도400이다. resolver 자체 throw/rejection은 원래 오류를 전파한다. 모든 입력 거절은 fingerprint·저장소·handler 이전이다.
+- 길이: `maxKeyLength`는 UTF-8 bytes, 기본255, 양의 safe integer만 허용한다. handler override가 우선이다. 잘못된 설정은 서버 configuration error(HTTP500)이며 resolver/저장소/handler를 실행하지 않는다. key 오류400, 기존 body 불일치422, PROCESSING409의 우선순위를 유지한다. raw header 프로파일은 draft의 Structured Field String 파싱을 구현한 것이 아니며 S7에서 표기한다.
+- 인증: Nest guard 또는 idempotency보다 앞선 인증/인가/서명 검증이 최초 요청과 replay 모두에 적용되어야 한다. handler 내부 검증만으로는 replay를 보호하지 못한다. scope에는 검증된 tenant/user를 넣고 header를 신뢰해 identity를 자동 선택하지 않는다.
+- 전환: 모든 scope의 저장 키가 변경된다. legacy 형태로 fallback 조회·이동·삭제하지 않는다. 단, 옛 global raw key/자유로운 resolver 값은 새 v1 key 문자열과 같을 수 있으므로 버전 prefix 자체가 구/신 저장 공간의 분리를 보장하지 않는다. 이미 S1 형식의 body가 있는 그런 레코드는 현 reader가 출처를 구별하지 못하고 재생할 수 있다. 따라서 전환 시에는 **기존 레코드가 없는 별도 물리 저장 namespace**(새 MemoryStorage, 검증된 빈 Redis keyPrefix, 새 Postgres tableName 또는 별도 저장소)를 반드시 사용하고, 구/신 키의 동일 저장 공간 공존은 지원하지 않는다. 옛 레코드에는 권한 범위를 입증할 identity 정보가 없으며 custom 문자열을 역분해해도 복구할 수 없다. 구/신 키가 함께 있으면 같은 업무가 다시 실행될 수 있다. **traffic pause와 drain만으로 이 중복 위험을 해결하지 못한다.** 전 노드 전환 전에 업무 DB/inbox의 durable unique command ID 또는 외부 업무 결과 조정으로 과거 재시도를 차단해야 한다. 그 보장이 없으면 과거 key를 가진 재시도를 upstream에서 계속 차단하고 모든 재전송 가능 기간·처리 불명 업무를 해소할 때까지 전환하지 않는다. TTL 만료만으로 안전하다고 간주하지 않는다.
+- 혼합 배포/롤백: old/new writer가 같은 업무를 받을 수 있는 롤링 배포는 미지원이다. 트래픽 중단→in-flight 업무 결과 확인→과거/새 key의 업무 중복 방지 확인→기존 데이터와 겹치지 않는 빈 저장 namespace 확인→전체 교체 후 재개한다. rollback도 동일하게 새 버전에서 처리한 업무를 구버전이 재실행하지 못하게 해야 한다. 무조건 dual-read, prefix 회전만 수행, 일괄 삭제는 전환 절차가 아니다. namespace 분리는 과거 응답 혼입을 막고, 별도 업무 중복 방지는 재실행을 막는 각각의 전제다. D01의 replay body 전환 조건도 함께 적용한다.
+- 회귀: 수정 전 tenant-only endpoint 충돌과 `::` 경계 충돌이 모두 실패함을 확인했다. tenant/user/method/path/key 단일 변경, 정상 retry, query/slash/parameter, header/resolver invalid, Express/Fastify guard, legacy/new 공존을 검증한다. 최종 실행 결과는 [S3 작업 기록](work-items/S3-request-isolation.md)에 기록한다.
+- 후속: S2 공개 scope 타입의 배열 반환 소비자 검사, S4 namespace/event/log, S7 raw header 프로파일·인증 예제, D07의 업무 중복 방지 조건과 전환 시나리오. D07 전체는 S5/S6 계약까지 반영한 뒤 확정한다.
+
+
+## D07 — S3에서 넘긴 전환 전제 (OPEN)
+
+2026-10-07 S3가 확정한 key/scope 전환은 [D03](#d03--요청-격리와-키-입력-decided)과
+[S7 인수인계 표](work-items/S7-adoption-docs.md#s3--d07-전환-인수인계-2026-10-07)를 따른다.
+legacy alias 재조회는 없지만 raw key와 새 address의 정확한 중첩은 가능하다. 기존 데이터와
+writer가 없는 빈 물리 namespace 및 업무 DB/inbox dedup 또는 과거 결과 조정이 모두 필요하다.
+구/신 writer 혼합은 지원하지 않으며 rollback도 새 버전이 처리한 업무를 중복 실행하지 못해야 한다.
+S3 회귀에서 alias-only 재실행, 정확한 address 중첩의0.4 body409, 별도 namespace 격리를 확인한다.
+D07 전체는 S5/S6의 실패·만료 계약과 S7 실행 전환 절차가 완성될 때 확정한다.

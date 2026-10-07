@@ -16,9 +16,11 @@ import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { IDEMPOTENT_METADATA_KEY } from '../../src/idempotency.constants';
 import { encodeReplayBody } from '../../src/utils/replay-body';
 import { FakeStorage } from '../support/fake-storage';
+import { globalRequestKey } from '../support/request-key';
 import { buildCallHandler, buildExecutionContext } from '../support/execution-context.factory';
 
 const KEY = 'response-completion';
+const STORAGE_KEY = globalRequestKey(KEY);
 
 const buildHarness = () => {
   const storage = new FakeStorage();
@@ -72,7 +74,7 @@ describe('REGRESSION: HTTP response is captured on successful completion', () =>
 
       expect(storage.complete).not.toHaveBeenCalled();
       expect(emitted).not.toHaveBeenCalled();
-      expect(await storage.get(KEY)).toMatchObject({ status: 'PROCESSING' });
+      expect(await storage.get(STORAGE_KEY)).toMatchObject({ status: 'PROCESSING' });
 
       const retry = buildCallHandler(of({ unexpected: 'duplicate-execution' }));
       await expect(firstValueFrom(interceptor.intercept(context(), retry))).rejects.toBeInstanceOf(
@@ -100,7 +102,7 @@ describe('REGRESSION: HTTP response is captured on successful completion', () =>
     await expect(response).resolves.toEqual(finalValue);
     expect(storage.complete).toHaveBeenCalledTimes(1);
     expect(storage.complete).toHaveBeenCalledWith(
-      KEY,
+      STORAGE_KEY,
       expect.any(String),
       expect.objectContaining({ statusCode: 200, body: encodeReplayBody(finalValue) }),
       60,
@@ -129,7 +131,7 @@ describe('REGRESSION: HTTP response is captured on successful completion', () =>
     await rejected;
     expect(storage.complete).not.toHaveBeenCalled();
     expect(storage.delete).toHaveBeenCalledTimes(1);
-    expect(await storage.get(KEY)).toBeNull();
+    expect(await storage.get(STORAGE_KEY)).toBeNull();
   });
 
   it('treats EMPTY as one successful undefined response and can replay it', async () => {
@@ -139,12 +141,12 @@ describe('REGRESSION: HTTP response is captured on successful completion', () =>
     await expect(lastValueFrom(interceptor.intercept(context(), next))).resolves.toBeUndefined();
     expect(storage.complete).toHaveBeenCalledTimes(1);
     expect(storage.complete).toHaveBeenCalledWith(
-      KEY,
+      STORAGE_KEY,
       expect.any(String),
       expect.objectContaining({ statusCode: 200, body: encodeReplayBody(undefined) }),
       60,
     );
-    expect(await storage.get(KEY)).toMatchObject({
+    expect(await storage.get(STORAGE_KEY)).toMatchObject({
       status: 'COMPLETED',
       responseBody: encodeReplayBody(undefined),
     });
@@ -173,7 +175,7 @@ describe('REGRESSION: HTTP response is captured on successful completion', () =>
       expect(emitted).not.toHaveBeenCalled();
       expect(storage.complete).not.toHaveBeenCalled();
       expect(storage.delete).not.toHaveBeenCalled();
-      expect(await storage.get(KEY)).toMatchObject({ status: 'PROCESSING' });
+      expect(await storage.get(STORAGE_KEY)).toMatchObject({ status: 'PROCESSING' });
 
       const retry = buildCallHandler(of({ unexpected: 'duplicate-execution' }));
       await expect(firstValueFrom(interceptor.intercept(context(), retry))).rejects.toBeInstanceOf(

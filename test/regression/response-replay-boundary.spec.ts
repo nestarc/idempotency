@@ -2,6 +2,8 @@
  * Regression: old COMPLETED records may contain fields excluded from the first
  * HTTP response. Replaying unversioned JSON cannot recover class metadata.
  * Reject it without applying cached headers or deleting/re-running the work.
+ * Fixtures use current encoded keys to exercise body validation independently
+ * of the S3 rule that legacy storage keys are never read.
  * Manual response detection must use the route property, not a function name.
  */
 import 'reflect-metadata';
@@ -13,6 +15,7 @@ import { Idempotent } from '../../src/idempotency.decorator';
 import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { IDEMPOTENT_METADATA_KEY } from '../../src/idempotency.constants';
 import { FakeStorage } from '../support/fake-storage';
+import { globalRequestKey } from '../support/request-key';
 import { buildCallHandler, buildExecutionContext } from '../support/execution-context.factory';
 
 const PREFIX = '@nestarc/idempotency:replay:v1:';
@@ -46,7 +49,7 @@ describe('REGRESSION: safe replay boundary', () => {
   ])('blocks %s without restoring headers or re-executing', async (_name, responseBody) => {
     const { storage, onEvent, interceptor, context, res } = harness();
     storage.seed({
-      key: 'legacy',
+      key: globalRequestKey('legacy'),
       status: 'COMPLETED',
       statusCode: 201,
       responseBody,
@@ -54,7 +57,7 @@ describe('REGRESSION: safe replay boundary', () => {
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
     });
-    const original = await storage.get('legacy');
+    const original = await storage.get(globalRequestKey('legacy'));
     const next = buildCallHandler(of({ duplicate: true }));
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -69,7 +72,7 @@ describe('REGRESSION: safe replay boundary', () => {
     expect(storage.create).not.toHaveBeenCalled();
     expect(storage.complete).not.toHaveBeenCalled();
     expect(storage.delete).not.toHaveBeenCalled();
-    expect(await storage.get('legacy')).toEqual(original);
+    expect(await storage.get(globalRequestKey('legacy'))).toEqual(original);
   });
 
   it('keeps fingerprint mismatch priority over an unreadable completed response', async () => {
@@ -80,7 +83,7 @@ describe('REGRESSION: safe replay boundary', () => {
       fingerprint: () => 'current-fingerprint',
     });
     storage.seed({
-      key: 'legacy',
+      key: globalRequestKey('legacy'),
       status: 'COMPLETED',
       fingerprint: 'previous-fingerprint',
       responseBody: '{"secret":"private"}',

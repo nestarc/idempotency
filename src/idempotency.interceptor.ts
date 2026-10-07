@@ -32,6 +32,7 @@ import {
   IDEMPOTENT_METADATA_KEY,
 } from './idempotency.constants';
 import { extractActualRequestPath } from './utils/request-scope';
+import { createRequestKey, isValidKeyString } from './utils/request-key';
 import { decodeReplayBody, encodeReplayBody } from './utils/replay-body';
 import { assertReplayableResponseMode } from './utils/response-mode';
 import {
@@ -73,7 +74,9 @@ interface RequestShape {
   method?: string;
   originalUrl?: string;
   url?: string;
-  headers: Record<string, string | string[] | undefined>;
+  headers: Record<string, unknown>;
+  rawHeaders?: string[];
+  raw?: { rawHeaders?: string[] };
   body: unknown;
 }
 
@@ -152,7 +155,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
     return from(this.resolveRawKey(opts, context, req)).pipe(
       switchMap((rawKey) => {
-        if (!rawKey) {
+        if (rawKey === undefined) {
           if (opts.required) {
             return throwError(
               () =>
@@ -162,15 +165,6 @@ export class IdempotencyInterceptor implements NestInterceptor {
             );
           }
           return next.handle();
-        }
-
-        if (rawKey.length > opts.maxKeyLength) {
-          return throwError(
-            () =>
-              new BadRequestException(
-                `${opts.headerName} must be ${opts.maxKeyLength} characters or fewer`,
-              ),
-          );
         }
 
         const scopedKey = this.applyScope(opts.scope, context, rawKey);
@@ -497,6 +491,22 @@ export class IdempotencyInterceptor implements NestInterceptor {
         `IdempotencyInterceptor: processingTtl must be a positive integer number of seconds, received ${String(processingTtl)}`,
       );
     }
+    const maxKeyLength = metadata.maxKeyLength !== undefined
+      ? metadata.maxKeyLength
+      : this.moduleOptions.maxKeyLength !== undefined
+        ? this.moduleOptions.maxKeyLength
+        : 255;
+    if (!Number.isSafeInteger(maxKeyLength) || maxKeyLength <= 0) {
+      throw new Error(
+        'IdempotencyInterceptor: maxKeyLength must be a positive safe integer number of UTF-8 bytes',
+      );
+    }
+    const scope = this.moduleOptions.scope === undefined
+      ? 'endpoint'
+      : this.moduleOptions.scope;
+    if (scope !== 'endpoint' && scope !== 'global' && typeof scope !== 'function') {
+      throw new Error('IdempotencyInterceptor: invalid scope configuration');
+    }
     return {
       required: metadata.required ?? true,
       ttl,
@@ -506,9 +516,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
       headerName: this.moduleOptions.headerName ?? DEFAULT_HEADER_NAME,
       keyResolver:
         metadata.keyResolver ?? this.moduleOptions.keyResolver,
-      maxKeyLength:
-        metadata.maxKeyLength ?? this.moduleOptions.maxKeyLength ?? 255,
-      scope: this.moduleOptions.scope ?? 'endpoint',
+      maxKeyLength,
+      scope,
       replayHeaders: this.moduleOptions.replayHeaders ?? true,
       observability: this.moduleOptions.observability,
     };
@@ -519,11 +528,39 @@ export class IdempotencyInterceptor implements NestInterceptor {
     context: ExecutionContext,
     req: RequestShape,
   ): Promise<string | undefined> {
+    let value: unknown;
     if (opts.keyResolver) {
-      return opts.keyResolver(context);
+      value = await opts.keyResolver(context);
+    } else {
+      const headerName = opts.headerName.toLowerCase();
+      const rawHeaders = req.rawHeaders ?? req.raw?.rawHeaders ?? [];
+      let occurrences = 0;
+      for (let index = 0; index < rawHeaders.length; index += 2) {
+        if (rawHeaders[index].toLowerCase() === headerName) occurrences += 1;
+      }
+      value = req.headers[headerName];
+      if (
+        occurrences > 1 ||
+        Array.isArray(value) ||
+        (typeof value === 'string' && value.includes(','))
+      ) {
+        throw new BadRequestException(
+          `${opts.headerName} must contain exactly one key`,
+        );
+      }
     }
-    const headerValue = req.headers[opts.headerName.toLowerCase()];
-    return Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    if (value === undefined) return undefined;
+    if (!isValidKeyString(value)) {
+      throw new BadRequestException(
+        `${opts.headerName} must be a nonblank string without control characters`,
+      );
+    }
+    if (Buffer.byteLength(value, 'utf8') > opts.maxKeyLength) {
+      throw new BadRequestException(
+        `${opts.headerName} must be ${opts.maxKeyLength} UTF-8 bytes or fewer`,
+      );
+    }
+    return value;
   }
 
   private async resolveFingerprint(
@@ -560,7 +597,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * For `scope: 'endpoint'` (the default), the interceptor first scopes by
    * the platform request's actual HTTP method + path. Express's
    * `req.originalUrl` wins, Fastify-style `req.url` is the fallback, query
-   * strings are ignored, and duplicate/trailing slashes are normalized.
+   * strings are ignored, and the actual path's slashes are preserved.
    *
    * If no actual request path is available, it falls back to NestJS route
    * template metadata (`PATH_METADATA` set by `@Controller` and
@@ -578,12 +615,34 @@ export class IdempotencyInterceptor implements NestInterceptor {
     rawKey: string,
   ): string {
     if (scope === 'global') {
-      return rawKey;
+      return createRequestKey(['global'], rawKey).key;
     }
+    let identity: readonly string[] = [];
     if (typeof scope === 'function') {
-      return `${scope(context)}::${rawKey}`;
+      const resolved: unknown = scope(context);
+      if (typeof resolved === 'string' && isValidKeyString(resolved)) {
+        identity = [resolved];
+      } else if (
+        Array.isArray(resolved) &&
+        resolved.length > 0 &&
+        // Array.from visits sparse entries as undefined instead of skipping
+        // them, so holes cannot silently become null in the encoded tuple.
+        Array.from(resolved).every(isValidKeyString)
+      ) {
+        identity = Array.from(resolved);
+      } else {
+        // An accidentally async resolver is unsupported. Consume a rejected
+        // native Promise so this configuration error cannot crash the process.
+        if (resolved instanceof Promise) void resolved.catch(() => undefined);
+        throw new Error(
+          'IdempotencyInterceptor: scope must return a nonblank string or a nonempty array of nonblank strings',
+        );
+      }
     }
-    return `${this.computeEndpointScope(context)}::${rawKey}`;
+    return createRequestKey(
+      ['endpoint', identity, this.computeEndpointScope(context)],
+      rawKey,
+    ).key;
   }
 
   /**
@@ -591,7 +650,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * Split out of {@link applyScope} so the fallback chain is easy to read
    * and independently testable.
    */
-  private computeEndpointScope(context: ExecutionContext): string {
+  private computeEndpointScope(context: ExecutionContext): readonly string[] {
     const controller = context.getClass();
     const handler = context.getHandler();
     const req = context.switchToHttp().getRequest<{
@@ -603,7 +662,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const actualPath = extractActualRequestPath(req);
 
     if (actualPath) {
-      return `${httpMethod} ${actualPath}`;
+      return ['path', httpMethod, actualPath];
     }
 
     // If no platform request path is available, use Nest route metadata.
@@ -624,14 +683,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
       const joined = `/${controllerPath}/${handlerPath}`
         .replace(/\/+/g, '/')
         .replace(/\/+$/, '') || '/';
-      return `${httpMethod} ${joined}`;
+      return ['route', httpMethod, joined];
     }
 
     // Fallback: class name + method name. Not URL-accurate but isolates
     // handlers within a single controller at minimum.
     const className = controller?.name ?? 'UnknownController';
     const methodName = handler?.name ?? 'unknownHandler';
-    return `${className}#${methodName}`;
+    return ['handler', httpMethod, className, methodName];
   }
 
   /**

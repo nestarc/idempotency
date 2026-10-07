@@ -194,22 +194,37 @@ until `processingTtl` expires; retrying after expiry can execute the operation
 again. A source error discards intermediate values and uses the existing error
 cleanup. Subscription cancellation does not complete or delete the record.
 
-### Upgrading stored responses (S1, unreleased)
+### Upgrading stored keys and responses (S1/S3, unreleased)
 
-New captures use a versioned opaque `responseBody` string, including empty bodies.
-Custom storage adapters must preserve that string exactly; do not parse or
-re-serialize it as JSON. Storage keys and database schema remain unchanged.
-Existing unversioned, missing, corrupt or unsupported-version COMPLETED bodies
-return 409 without applying stored status/headers, deleting the record, or
-re-running the handler. A fingerprint mismatch still returns 422 first.
+All scope modes now use versioned storage keys; old raw and `scope::key` records
+have no fallback lookup, automatic move or deletion. Response bodies
+also use a versioned opaque string, including empty bodies. Custom adapters must
+preserve it exactly. A legacy/corrupt body found under a **current-format key**
+returns 409 without replay or re-execution (a fingerprint mismatch takes priority
+with 422). There is no SQL schema change.
 
-Old and new readers/writers cannot safely coexist. Pause traffic to protected
-routes, drain in-flight work, replace all application instances, then resume with
-the same storage and keys. Preserve legacy records until their normal expiry or
-reconcile the original operation in the business system. Do not rotate keys or
-clear storage simply to turn 409 into a new execution. Rolling back also requires
-pausing traffic and resolving new-format records: old code cannot read them.
-TTL expiry alone does not prove the business operation failed.
+**Changing the key format can execute an old operation again. Pausing traffic
+and draining requests alone does not prevent this.** Before switching, protect
+past commands with a durable business/inbox unique ID, or reconcile business
+results and block past retries upstream. If that protection is unavailable,
+postpone the switch until all possible redeliveries and uncertain operations
+have been resolved. Cache TTL expiry does not prove that a retry is safe.
+
+Use a separate, verified empty storage namespace (a fresh MemoryStorage,
+Redis `keyPrefix`, Postgres `tableName`, or separate store). Old global/resolver
+keys were arbitrary strings and could equal a new encoded key: the version
+prefix alone does not prove record provenance. A coincident key with an
+S1-compatible body could otherwise replay an old response. Co-residence of old
+and new key formats in the same namespace is unsupported. Namespace isolation
+prevents old response mixing; business deduplication separately prevents repeats.
+
+Old/new writers must not overlap. Pause protected traffic, resolve in-flight
+work, verify business deduplication and the empty separate namespace, replace all
+instances, then resume. Rollback requires the same protection for commands
+processed by the new version; old code cannot read the new keys or bodies.
+Do not use automatic dual reads, key rotation alone or bulk deletion as a migration.
+Old records generally cannot prove the tenant/user authorization required by
+the new scope. See [D03 and the D07 handoff](docs/1.0.0/decisions.md#d03--요청-격리와-키-입력-decided).
 
 ## Redis storage
 
@@ -356,7 +371,7 @@ SELECT cron.schedule('idempotency-sweep', '* * * * *',
 | `processingTtl` | `number` (seconds)                             | same as `ttl`       | Optional in-flight PROCESSING record TTL.                                           |
 | `headerName`    | `string`                                       | `'Idempotency-Key'` | HTTP header carrying the key. Defaults to the IETF draft header name.               |
 | `keyResolver`   | `(ctx) => string \| undefined \| Promise<...>` | header lookup       | Resolve keys from webhook event ids, command ids, or other application values.      |
-| `maxKeyLength`  | `number`                                       | `255`               | Maximum accepted key length.                                                        |
+| `maxKeyLength`  | `number`                                       | `255`               | Maximum accepted key length in UTF-8 bytes; positive safe integer.                                                        |
 | `fingerprint`   | `boolean \| resolver`                          | `true`              | Compute a SHA-256 body fingerprint or provide a semantic custom fingerprint.         |
 | `scope`         | `IdempotencyScope`                             | `'endpoint'`        | How storage keys are namespaced. See [Scope](#scope) below.                         |
 | `replayHeaders` | `boolean \| string[]`                          | `true`              | Replay the default safe allowlist, an explicit allowlist, or disable header replay. |
@@ -365,24 +380,62 @@ SELECT cron.schedule('idempotency-sweep', '* * * * *',
 
 #### Scope
 
-The `scope` option controls how the storage key is derived from the raw header value. It matters when two different endpoints might receive the same `Idempotency-Key` value from a client.
+The `scope` option controls which requests can share a replayed response.
+Every mode uses a versioned SHA-256 key derived from a JSON tuple; separators in
+identity, path or key cannot change component boundaries.
 
-| Value        | Behavior                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `'endpoint'` | **Default.** Prepends `HTTP_METHOD /actual/path::` to the key, using the request path without the query string (e.g. `POST /payments/pay_1/capture::my-key`). This isolates parameterized resources such as `/orders/1` and `/orders/2`. Query strings are intentionally excluded to avoid accidental key drift from query ordering; use a custom `scope` function if query values must participate in idempotency. |
-| `'global'`   | Use the raw header value as-is. Safe only if clients guarantee globally-unique keys across all endpoints (Stripe-style).                                                                                                                                                                                                                                                                                            |
-| function     | `(ctx: ExecutionContext) => string`. Fully custom scoping — useful in multi-tenant systems where the scope should include the tenant id. The returned string is joined to the raw key with `::`.                                                                                                                                                                                                                    |
+| Value | Behavior |
+| --- | --- |
+| `'endpoint'` | **Default.** Includes the HTTP method and actual path, including path parameter values. Does not infer an authenticated identity. |
+| `'global'` | Shares keys across all endpoints and identities using this storage. Use only when every caller is authorized to share every response. |
+| function | Returns a nonblank string or a nonempty `readonly string[]` of nonblank identity components. Always **adds to** method + actual path; it no longer replaces the endpoint as in 0.4. |
+
+Actual paths preserve percent encoding and duplicate/trailing slashes, which
+routers may treat as different resources. Query strings remain excluded to
+avoid new executions caused by query ordering or tracking parameters. If a query
+value changes the operation, include selected values in the scope array in a
+stable order, or include them in a custom fingerprint to reject reuse with 422.
+Custom contexts without a URL fall back to Nest route metadata, then controller
+and handler names; ordinary Express/Fastify requests use their actual URL.
 
 ```ts
-// Multi-tenant example: include the tenant ID in the scope.
+// Authentication/authorization guards run before interceptors on every request.
 IdempotencyModule.forRoot({
   storage: new MemoryStorage(),
   scope: (ctx) => {
-    const req = ctx.switchToHttp().getRequest();
-    return `${req.user.tenantId}`;
+    const req = ctx.switchToHttp().getRequest<{
+      user: { tenantId: string; id: string };
+    }>();
+    return [req.user.tenantId, req.user.id];
   },
 });
 ```
+
+Populate `req.user` from verified authentication, never from an untrusted tenant
+header. Include every identity dimension whose responses must be isolated. A
+Nest guard must authorize each resource before this interceptor, including on
+replays and after permission revocation. Authentication or webhook signature
+verification only inside the handler is bypassed on replay. For webhooks, verify
+the provider signature over the original raw bytes in a guard before resolving
+the event ID. The Express/Fastify
+[executable guard and HMAC examples](test/e2e/request-isolation.e2e-spec.ts)
+exercise this ordering.
+
+#### Key input
+
+Headers carry one raw opaque string, **not a parsed Structured Field String**.
+`K` and `"K"` are different keys; quoting and escapes are literal. Repeated fields,
+arrays, commas (including proxy-joined fields), empty/blank strings, control
+characters and unpaired Unicode surrogates return 400 before fingerprinting,
+storage or handler execution. Proxies must preserve/reject duplicates rather
+than silently discard them. The package does not trim, case-fold or Unicode
+normalize keys; the HTTP parser may strip surrounding header whitespace.
+
+`keyResolver` replaces header lookup entirely, accepts sync/async string or
+undefined, and applies the same string checks, except that commas are allowed.
+Only undefined means missing: `required: false` bypasses missing keys but still
+rejects invalid keys. `maxKeyLength` counts **UTF-8 bytes**, defaults to 255 and
+must be a positive safe integer. Invalid configuration is a server error (500).
 
 ### Decorator options (`@Idempotent(options?)`)
 
@@ -419,6 +472,8 @@ Use `keyResolver` when the stable key comes from a webhook event id or command
 id instead of the `Idempotency-Key` header:
 
 ```ts
+// This guard must verify the provider signature over the original raw body.
+@UseGuards(StripeSignatureGuard)
 @Post('webhooks/stripe')
 @Idempotent({
   keyResolver: (ctx) => {
@@ -502,7 +557,7 @@ Client Request (with Idempotency-Key header)
     │     └─ resolve TTL (reject 0/negative/fractional/NaN/Infinity)
     │
     ├─ 2. Apply scope to the key
-    │     (default: `HTTP_METHOD /actual/path::`, without query string)
+    │     (versioned hash of identity + method + actual path + key; query excluded)
     │
     ├─ 3. Look up the scoped key in storage
     │     ├─ COMPLETED + matching fingerprint + supported body → replay
@@ -538,10 +593,10 @@ Storage adapters implement **token-based compare-and-set**: each `create()` retu
 
 | Status | When                                                                                                                                                                   | IETF rationale                    |
 | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-|    400 | Required key is missing, or the resolved key exceeds `maxKeyLength` | client contract |
+|    400 | Required key is missing, malformed/repeated, or exceeds `maxKeyLength` UTF-8 bytes | client contract |
 |    409 | The record is PROCESSING, or its completed payload is legacy/corrupt/unsupported | concurrent duplicate / safe replay unavailable |
 |    422 | A record exists under this scoped key with a different request-body fingerprint (reused key with new payload)                                                          | key reused with new payload       |
-|    500 | Invalid developer configuration, including unsupported manual/render/redirect response modes or invalid TTLs | configuration error; SSE follows the stream behavior above |
+|    500 | Invalid developer configuration, including unsupported manual/render/redirect response modes, TTLs, maxKeyLength or scope values | configuration error; SSE follows the stream behavior above |
 
 When a racing winner has already finished with a supported payload and matching fingerprint, its response is replayed. The interceptor re-reads the record after a lost `create()` race and applies the same validation as on the initial read.
 
@@ -620,14 +675,14 @@ The package ships a **shared contract test suite** at `test/support/shared-stora
 
 ## IETF draft-compatible profile
 
-This package targets the behavior described by [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). The draft is not a final RFC, so the package documents its supported profile explicitly. As of v0.4.0 it covers:
+This package targets the behavior described by [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). The draft is not a final RFC, so the package documents its supported profile explicitly. The unreleased 1.0 profile covers:
 
-- ✅ `Idempotency-Key` header recognition (configurable name)
+- ✅ `Idempotency-Key` header recognition (configurable name); raw opaque strings, not Structured Field parsing
 - ✅ Custom application key resolvers for webhook event ids and command ids
 - ✅ Atomic key creation with NX semantics (built-in adapters)
 - ✅ **Token-based compare-and-set** on every mutation — a slow caller whose record was evicted by TTL cannot clobber a newer caller's record
 - ✅ Response replay for completed requests (matching fingerprint)
-- ✅ **409 Conflict** only when the winner is genuinely still in flight (not for lost races against already-completed winners)
+- ✅ **409 Conflict** for in-flight requests and stored response formats that cannot be safely replayed
 - ✅ **422 Unprocessable Entity** for fingerprint mismatch — priority over PROCESSING state per draft semantics
 - ✅ Configurable completed replay TTL and optional processing TTL with boundary validation (positive integer only)
 - ✅ **Per-endpoint key scoping by actual request path** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /actual/path::rawKey`, excluding the query string to avoid accidental key drift

@@ -155,3 +155,10 @@ S8 최종 matrix 결과가 나오기 전에는 전체 지원 환경을 검증했
 - S7: DB adapter·옵션·sweep import를 새 subpath로 옮기고 PG의 @types/pg 설치를 명시한다. README 설치/경로/생성자 오기는 S2에서 수정했으며 sweep DI 연결·recipe 검증은 S7에 남는다.
 - S8: `npm run test:consumers -- --tarball <동일 artifact>`를 최종 Node/Nest matrix와 필수 DB 게이트에 연결한다. summary/lockfile/로그/checksum을 CI artifact로 보존하고 게시 입력과 연결한다. 실행기 기본 서비스 누락 실패를 유지한다.
 - 다음 행동: S3~S6 구현 후 공개 타입 변경을 fixture에 반영하고 S7/S8에서 최종 통합한다. 이 기록을 S8 또는1.0 출시 승인으로 해석하지 않는다.
+
+### S3 공개 타입 인수인계 (2026-10-07)
+
+`IdempotencyScope`의 함수 반환을 `string | readonly string[]`로 확장했다. 추가 export는 없고
+기존 root 타입 경계를 유지한다. 함수는 endpoint를 대체하지 않고 identity를 추가한다.
+`test/consumers/common/public-api.ts`에 readonly tuple 소비 예제를 반영했다.
+S3 tarball 소비자 검증 결과는 [S3 기록](S3-request-isolation.md)을 따른다.

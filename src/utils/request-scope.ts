@@ -10,7 +10,10 @@ export function extractActualRequestPath(
   if (!raw) {
     return undefined;
   }
-  return normalizeHttpPath(raw);
+  // Real routers can distinguish duplicate/trailing slashes. Do not merge
+  // distinct resources merely because route metadata is usually normalized.
+  const path = raw.split('?')[0];
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 export function normalizeHttpPath(raw: string): string {

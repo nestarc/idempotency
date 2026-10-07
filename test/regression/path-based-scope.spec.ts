@@ -13,7 +13,9 @@
  * controller class and handler method to build a `HTTP_METHOD /path::`
  * prefix, matching the IETF draft recommendation that idempotency is
  * scoped per (key, request URI). Controllers without metadata (custom
- * decorators, tests) fall back to the legacy class#method strategy.
+ * decorators, tests) fall back to class and method identity. S3 retains
+ * this isolation in a versioned encoded key using the actual request path
+ * when available, then route metadata, then handler identity.
  */
 import 'reflect-metadata';
 import {
@@ -29,6 +31,7 @@ import { IdempotencyModule } from '../../src/idempotency.module';
 import { IdempotencyInterceptor } from '../../src/idempotency.interceptor';
 import { Idempotent } from '../../src/idempotency.decorator';
 import { MemoryStorage } from '../../src/storage/memory.storage';
+import { createRequestKey } from '../../src/utils/request-key';
 import type { CreateResult } from '../../src/interfaces/idempotency-storage.interface';
 
 /**
@@ -133,7 +136,7 @@ describe('REGRESSION: route-path-based scope (cross-module isolation)', () => {
     expect(V2UsersController.calls).toBe(1);
   });
 
-  it('uses the HTTP method + real route path as the storage key prefix', async () => {
+  it('encodes the HTTP method and actual route path in the storage key', async () => {
     const before = storage.capturedKeys.length;
 
     await request(app.getHttpServer())
@@ -143,11 +146,13 @@ describe('REGRESSION: route-path-based scope (cross-module isolation)', () => {
 
     expect(storage.capturedKeys.length).toBeGreaterThan(before);
     const scopedKey = storage.capturedKeys[storage.capturedKeys.length - 1];
-    // The scoped key must contain the HTTP method and the real route path,
-    // NOT the class name.
-    expect(scopedKey).toContain('POST');
-    expect(scopedKey).toContain('v1/users');
-    expect(scopedKey).toContain('::probe-key');
+    expect(scopedKey).toBe(
+      createRequestKey(
+        ['endpoint', [], ['path', 'POST', '/v1/users']],
+        'probe-key',
+      ).key,
+    );
+    expect(scopedKey).not.toContain('probe-key');
     expect(scopedKey).not.toContain('V1UsersController');
   });
 });

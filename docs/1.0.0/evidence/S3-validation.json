@@ -1,0 +1,286 @@
+{
+  "date": "2026-10-07",
+  "timezone": "Asia/Seoul",
+  "target": {
+    "baseCommit": "e2b9cec673acea9726fddc22dcdc2167283d3ead",
+    "state": "S3 working tree; no commit/publish",
+    "sourceSha256": {
+      "src/idempotency.interceptor.ts": "c3fdb8863ebf9e17a85719c6b15cfa9dbd578014be485537b9972516794aaa85",
+      "src/interfaces/idempotency-options.interface.ts": "563c65194133cbbe209faea522c7b7785b1c3b4bfe7664a94fc83277355d011e",
+      "src/utils/request-key.ts": "ef05d44adb4e642e3d8b4b0643df7b37ec3b823cd26ee53432ceabc488ab1962",
+      "src/utils/request-scope.ts": "a95a8b03304f89ea7b96771d6e7225f42f236ae686d60445cb528edc85d8a639",
+      "test/consumers/common/public-api.ts": "e499f5d51553ac85aad9f2a7e968a9d029e511eb52366b4b10c14c2eebe66cf8",
+      "test/e2e/request-isolation.e2e-spec.ts": "8025f292279f55bcf5f93931dfa3ca16484ee9a9076fde42c8f88e0aed9a1a38",
+      "test/idempotency.interceptor.spec.ts": "b7d52aa1256c12fe9b1427ce1bcf4f20e56c6e5d790096c6b6d6572a6d01aa4e",
+      "test/regression/path-based-scope.spec.ts": "810d5998f973853a69290f2cd10fb22e95980b180a1b553dd280eba427eec4c1",
+      "test/regression/race-completed-winner.spec.ts": "24398e1f563ea07fca54b3e5554a813182879377b0a9e569c63e5ba6fb490efb",
+      "test/regression/request-isolation.spec.ts": "fb31fe136bd4a5c6e6636c4f9524621fd58cb80fea9163d291a97a59aa6771fe",
+      "test/regression/request-key-validation.spec.ts": "2dac29563072124586abbc72f99333655d9fb77330b7865ee01fd5892e1b9e82",
+      "test/regression/response-completion.spec.ts": "7441189972d62cefd6aae9ca0943b9e626000672e42891961706896b3ff91239",
+      "test/regression/response-replay-boundary.spec.ts": "81656a8fb39867c18d8e6b02443841ad7d7f76bf310f0d7d85d476ce651e842f",
+      "test/support/request-key.ts": "463fc0d84a6417b8f6a1a44fb57480f0b52b0230c2a360ab2fe3d760b1922b58",
+      "test/utils/request-key.spec.ts": "01f9db8ae5cc7b7fe9736d458985a22ed0083f15bc42bbbea661b7ac89e5329b",
+      "test/utils/request-scope.spec.ts": "72e6e210265ff4f138f667638034cc315a611511b1bb4276bbd878b47c2f9b16"
+    }
+  },
+  "environment": {
+    "platform": "darwin/arm64",
+    "node": "24.11.1",
+    "npm": "11.6.2",
+    "nestjsCommonCoreExpress": "11.1.18",
+    "nestjsFastify": "11.1.19",
+    "workspaceTypeScript": "5.9.3",
+    "consumerTypeScript": "5.7.3",
+    "redis": "7.2.7",
+    "postgres": "16.14",
+    "services": "fresh test-only loopback instances; connection values omitted"
+  },
+  "baseline": [
+    {
+      "test": "original tenant-only endpoint and :: boundary regressions",
+      "failed": 2,
+      "source": "Pre-change agent run on e2b9cec; both returned payment response for other endpoint"
+    },
+    {
+      "test": "request-key-validation initial 163 cases",
+      "passed": 36,
+      "failed": 127,
+      "log": "/private/tmp/s3-request-key-validation-red.log"
+    }
+  ],
+  "checks": [
+    {
+      "command": "npm run lint",
+      "result": "pass",
+      "log": "/private/tmp/s3-lint.log"
+    },
+    {
+      "command": "npx tsc --noEmit --incremental false -p tsconfig.json",
+      "result": "pass",
+      "log": "/private/tmp/s3-typecheck.log"
+    },
+    {
+      "command": "npm run build",
+      "result": "pass",
+      "log": "/private/tmp/s3-build.log"
+    },
+    {
+      "command": "npm run test -- --runInBand test/regression/request-isolation.spec.ts test/regression/request-key-validation.spec.ts test/utils/request-key.spec.ts test/utils/request-scope.spec.ts",
+      "result": "pass",
+      "suites": 4,
+      "passed": 203,
+      "failed": 0,
+      "skipped": 0,
+      "log": "/private/tmp/s3-regressions.log"
+    },
+    {
+      "command": "npm run test:all -- --runInBand",
+      "withTestServiceUrls": true,
+      "result": "pass",
+      "suites": 30,
+      "passed": 605,
+      "failed": 0,
+      "skipped": 0,
+      "log": "/private/tmp/s3-test-all.log",
+      "summary": "30 passed, 30 total\nTests:       605 passed, 605 total\nSnapshots:   0 total\nTime:        6.385 s, estimated 39 s\nRan all test suites in 2 projects."
+    },
+    {
+      "command": "npm run test:consumers",
+      "withTestServiceUrls": true,
+      "result": "pass",
+      "passed": 41,
+      "expectedFailures": 3,
+      "skipped": 0,
+      "summary": "/private/tmp/idempotency-consumers-qWBJwU/summary.json",
+      "tarball": "/private/tmp/idempotency-consumers-qWBJwU/nestarc-idempotency-0.4.0.tgz",
+      "sha256": "6bdd65b058e3bf5df7484b707c7fa03b66194dd18f56c1d6c291ecf718678ffd",
+      "startedAt": "2026-10-07T10:42:57.395Z",
+      "finishedAt": "2026-10-07T10:43:26.569Z",
+      "checks": [
+        {
+          "name": "npm-version",
+          "status": "pass"
+        },
+        {
+          "name": "git-head",
+          "status": "pass"
+        },
+        {
+          "name": "git-status",
+          "status": "pass"
+        },
+        {
+          "name": "build",
+          "status": "pass"
+        },
+        {
+          "name": "pack",
+          "status": "pass"
+        },
+        {
+          "name": "tarball-files",
+          "status": "pass"
+        },
+        {
+          "name": "tarball-inventory",
+          "status": "pass"
+        },
+        {
+          "name": "memory-initial-lock",
+          "status": "pass"
+        },
+        {
+          "name": "memory-initial-ci",
+          "status": "pass"
+        },
+        {
+          "name": "memory-initial-npm-ls",
+          "status": "pass"
+        },
+        {
+          "name": "memory-initial-isolation",
+          "status": "pass"
+        },
+        {
+          "name": "memory-node-import",
+          "status": "pass"
+        },
+        {
+          "name": "memory-strict-node",
+          "status": "pass"
+        },
+        {
+          "name": "memory-strict-node16",
+          "status": "pass"
+        },
+        {
+          "name": "memory-strict-nodenext",
+          "status": "pass"
+        },
+        {
+          "name": "memory-runtime",
+          "status": "pass"
+        },
+        {
+          "name": "memory-storage-smoke",
+          "status": "pass"
+        },
+        {
+          "name": "redis-initial-lock",
+          "status": "pass"
+        },
+        {
+          "name": "redis-initial-ci",
+          "status": "pass"
+        },
+        {
+          "name": "redis-initial-npm-ls",
+          "status": "pass"
+        },
+        {
+          "name": "redis-initial-isolation",
+          "status": "pass"
+        },
+        {
+          "name": "redis-node-import",
+          "status": "pass"
+        },
+        {
+          "name": "redis-strict-node",
+          "status": "pass"
+        },
+        {
+          "name": "redis-strict-node16",
+          "status": "pass"
+        },
+        {
+          "name": "redis-strict-nodenext",
+          "status": "pass"
+        },
+        {
+          "name": "redis-runtime",
+          "status": "pass"
+        },
+        {
+          "name": "redis-storage-smoke",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-without-pg-types-lock",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-without-pg-types-ci",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-without-pg-types-npm-ls",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-without-pg-types-isolation",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-node-import",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-without-pg-types-node",
+          "status": "expected-failure"
+        },
+        {
+          "name": "postgres-without-pg-types-node16",
+          "status": "expected-failure"
+        },
+        {
+          "name": "postgres-without-pg-types-nodenext",
+          "status": "expected-failure"
+        },
+        {
+          "name": "postgres-with-pg-types-lock",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-with-pg-types-ci",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-with-pg-types-npm-ls",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-with-pg-types-isolation",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-with-pg-types-node",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-with-pg-types-node16",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-with-pg-types-nodenext",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-runtime",
+          "status": "pass"
+        },
+        {
+          "name": "postgres-storage-smoke",
+          "status": "pass"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Representative Node24/Nest11 only; final S8 support/release matrix remains.",
+    "Initial HTTP listener and local DB setup hit sandbox EPERM; approved local executions passed.",
+    "Initial consumer escalation timed out; approved retry passed.",
+    "No operational migration performed: separate empty storage namespace plus durable business deduplication/reconciliation required.",
+    "S4 event/error/log protection and S5/S6 lifecycle/adapter contracts are separate work items."
+  ]
+}

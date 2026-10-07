@@ -23,6 +23,7 @@ import { encodeReplayBody } from '../../src/utils/replay-body';
 import type { IdempotencyOptions } from '../../src/interfaces/idempotency-options.interface';
 import type { IdempotencyRecord } from '../../src/interfaces/idempotency-record.interface';
 import { FakeStorage } from '../support/fake-storage';
+import { globalRequestKey } from '../support/request-key';
 import {
   buildCallHandler,
   buildExecutionContext,
@@ -64,7 +65,7 @@ describe('REGRESSION: get→create race dispatch', () => {
     // A's subsequent re-read (expected after acquired=false) should see
     // B's completed record with matching fingerprint.
     const completedRecord: IdempotencyRecord = {
-      key: 'K-race',
+      key: globalRequestKey('K-race'),
       token: 'B-token',
       fingerprint: sha256({ amount: 100 }),
       status: 'COMPLETED',
@@ -117,7 +118,7 @@ describe('REGRESSION: get→create race dispatch', () => {
     storage.get.mockResolvedValueOnce(null);
     storage.create.mockResolvedValueOnce({ acquired: false });
     const racedRecord: IdempotencyRecord = {
-      key: 'K-race',
+      key: globalRequestKey('K-race'),
       token: 'B-token',
       fingerprint: sha256({ amount: 100 }), // B's body
       status: 'COMPLETED',
@@ -164,7 +165,7 @@ describe('REGRESSION: get→create race dispatch', () => {
     storage.get.mockResolvedValueOnce(null);
     storage.create.mockResolvedValueOnce({ acquired: false });
     const processingRecord: IdempotencyRecord = {
-      key: 'K-race',
+      key: globalRequestKey('K-race'),
       token: 'B-token',
       fingerprint: sha256({ amount: 100 }),
       status: 'PROCESSING',

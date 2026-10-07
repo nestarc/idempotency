@@ -15,10 +15,12 @@ import { Idempotent } from '../src/idempotency.decorator';
 import { IDEMPOTENT_METADATA_KEY } from '../src/idempotency.constants';
 import { stableJsonStringify } from '../src/utils/stable-json';
 import { encodeReplayBody } from '../src/utils/replay-body';
+import { createRequestKey } from '../src/utils/request-key';
 import type { IdempotencyOptions } from '../src/interfaces/idempotency-options.interface';
 import type { IdempotentMetadata } from '../src/interfaces/idempotency-options.interface';
 
 import { FakeStorage } from './support/fake-storage';
+import { globalRequestKey } from './support/request-key';
 import {
   buildCallHandler,
   buildExecutionContext,
@@ -40,8 +42,8 @@ const buildInterceptor = (overrides: Partial<IdempotencyOptions> = {}) => {
     ttl: 86_400,
     headerName: 'Idempotency-Key',
     fingerprint: true,
-    // Most tests assert against the raw key (e.g. 'K1'). Use 'global' scope
-    // to keep those assertions simple. Dedicated scope tests override this.
+    // Most tests isolate storage behavior from endpoint composition.
+    // Global keys still use the versioned encoding; scope tests override this.
     scope: 'global',
     ...overrides,
   };
@@ -130,7 +132,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K-CUSTOM',
+        globalRequestKey('K-CUSTOM'),
         expect.any(String),
         86_400,
       );
@@ -157,7 +159,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'cmd-123',
+        globalRequestKey('cmd-123'),
         expect.any(String),
         86_400,
       );
@@ -184,7 +186,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'route-key',
+        globalRequestKey('route-key'),
         expect.any(String),
         86_400,
       );
@@ -208,7 +210,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'async-key',
+        globalRequestKey('async-key'),
         expect.any(String),
         86_400,
       );
@@ -293,12 +295,12 @@ describe('IdempotencyInterceptor', () => {
 
       // create + complete were called with the right shape.
       expect(storage.create).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         sha256({ amount: 100 }),
         86_400,
       );
       expect(storage.complete).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         expect.any(String), // token
         { statusCode: 201, body: encodeReplayBody({ ok: true }) },
         86_400,
@@ -325,7 +327,7 @@ describe('IdempotencyInterceptor', () => {
       const { interceptor, storage } = buildInterceptor();
       const fp = sha256({ amount: 100 });
       storage.seed({
-        key: 'K1',
+        key: globalRequestKey('K1'),
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 202,
@@ -365,7 +367,7 @@ describe('IdempotencyInterceptor', () => {
       const { interceptor, storage } = buildInterceptor();
       const fp = sha256({ amount: 100 });
       storage.seed({
-        key: 'K1',
+        key: globalRequestKey('K1'),
         fingerprint: fp,
         status: 'PROCESSING',
         createdAt: new Date(),
@@ -423,7 +425,7 @@ describe('IdempotencyInterceptor', () => {
     it('throws 422 for a COMPLETED record with a different fingerprint', async () => {
       const { interceptor, storage } = buildInterceptor();
       storage.seed({
-        key: 'K1',
+        key: globalRequestKey('K1'),
         fingerprint: sha256({ amount: 100 }),
         status: 'COMPLETED',
         statusCode: 200,
@@ -453,7 +455,7 @@ describe('IdempotencyInterceptor', () => {
     it('prefers 422 over 409 when a PROCESSING record has a different fingerprint', async () => {
       const { interceptor, storage } = buildInterceptor();
       storage.seed({
-        key: 'K1',
+        key: globalRequestKey('K1'),
         fingerprint: sha256({ amount: 100 }),
         status: 'PROCESSING',
         createdAt: new Date(),
@@ -479,7 +481,7 @@ describe('IdempotencyInterceptor', () => {
     it('skips fingerprint verification when fingerprint=false', async () => {
       const { interceptor, storage } = buildInterceptor({ fingerprint: false });
       storage.seed({
-        key: 'K1',
+        key: globalRequestKey('K1'),
         fingerprint: undefined,
         status: 'COMPLETED',
         statusCode: 200,
@@ -508,7 +510,7 @@ describe('IdempotencyInterceptor', () => {
     it('treats object key order differences as the same fingerprint', async () => {
       const { interceptor, storage } = buildInterceptor();
       storage.seed({
-        key: 'K-stable',
+        key: globalRequestKey('K-stable'),
         fingerprint: sha256({ a: { c: 3, d: 4 }, b: 2 }),
         status: 'COMPLETED',
         statusCode: 200,
@@ -543,7 +545,7 @@ describe('IdempotencyInterceptor', () => {
         },
       });
       storage.seed({
-        key: 'K-custom-fp',
+        key: globalRequestKey('K-custom-fp'),
         fingerprint: 'order:order-1',
         status: 'COMPLETED',
         statusCode: 200,
@@ -576,7 +578,7 @@ describe('IdempotencyInterceptor', () => {
         },
       });
       storage.seed({
-        key: 'K-custom-fp-mismatch',
+        key: globalRequestKey('K-custom-fp-mismatch'),
         fingerprint: 'order:order-1',
         status: 'COMPLETED',
         statusCode: 200,
@@ -623,7 +625,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K-route-fp',
+        globalRequestKey('K-route-fp'),
         'route-fingerprint',
         86_400,
       );
@@ -647,7 +649,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K-async-fp',
+        globalRequestKey('K-async-fp'),
         'async-fingerprint',
         86_400,
       );
@@ -704,7 +706,10 @@ describe('IdempotencyInterceptor', () => {
         firstValueFrom(interceptor.intercept(context, next)),
       ).rejects.toBe(boom);
 
-      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
+      expect(storage.delete).toHaveBeenCalledWith(
+        globalRequestKey('K1'),
+        expect.any(String),
+      );
       expect(storage.complete).not.toHaveBeenCalled();
     });
 
@@ -727,7 +732,10 @@ describe('IdempotencyInterceptor', () => {
         firstValueFrom(interceptor.intercept(context, next)),
       ).rejects.toBe(httpErr);
 
-      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
+      expect(storage.delete).toHaveBeenCalledWith(
+        globalRequestKey('K1'),
+        expect.any(String),
+      );
     });
   });
 
@@ -801,7 +809,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K-real',
+        globalRequestKey('K-real'),
         sha256({ v: 1 }),
         86_400,
       );
@@ -830,12 +838,12 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         expect.any(String),
         3600,
       );
       expect(storage.complete).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         expect.any(String), // token
         expect.any(Object),
         3600,
@@ -861,12 +869,12 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K-processing-ttl',
+        globalRequestKey('K-processing-ttl'),
         expect.any(String),
         30,
       );
       expect(storage.complete).toHaveBeenCalledWith(
-        'K-processing-ttl',
+        globalRequestKey('K-processing-ttl'),
         expect.any(String),
         expect.any(Object),
         86_400,
@@ -896,12 +904,12 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K-handler-processing-ttl',
+        globalRequestKey('K-handler-processing-ttl'),
         expect.any(String),
         15,
       );
       expect(storage.complete).toHaveBeenCalledWith(
-        'K-handler-processing-ttl',
+        globalRequestKey('K-handler-processing-ttl'),
         expect.any(String),
         expect.any(Object),
         3600,
@@ -952,7 +960,7 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toEqual({ fromPromise: true });
       expect(storage.complete).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         expect.any(String),
         { statusCode: 200, body: encodeReplayBody({ fromPromise: true }) },
         86_400,
@@ -979,7 +987,7 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toBeUndefined();
       expect(storage.complete).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         expect.any(String),
         { statusCode: 204, body: encodeReplayBody(undefined) },
         86_400,
@@ -1019,7 +1027,9 @@ describe('IdempotencyInterceptor', () => {
       expect(result).toBe(circular);
       expect(storage.complete).not.toHaveBeenCalled();
       expect(storage.delete).not.toHaveBeenCalled();
-      expect(await storage.get('K1')).toMatchObject({ status: 'PROCESSING' });
+      expect(await storage.get(globalRequestKey('K1'))).toMatchObject({
+        status: 'PROCESSING',
+      });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringMatching(/not replayable.*retaining.*PROCESSING/i),
       );
@@ -1053,7 +1063,7 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toEqual([{ id: 1 }]);
       expect(storage.create).toHaveBeenCalledWith(
-        'K-get',
+        globalRequestKey('K-get'),
         sha256({ q: 'test' }),
         86_400,
       );
@@ -1118,7 +1128,10 @@ describe('IdempotencyInterceptor', () => {
 
       // delete was called and returned stale, but the error still propagates
       // without any additional exception being thrown.
-      expect(storage.delete).toHaveBeenCalledWith('K1', expect.any(String));
+      expect(storage.delete).toHaveBeenCalledWith(
+        globalRequestKey('K1'),
+        expect.any(String),
+      );
     });
   });
 
@@ -1171,7 +1184,7 @@ describe('IdempotencyInterceptor', () => {
         },
       });
       storage.seed({
-        key: 'K-replayed',
+        key: globalRequestKey('K-replayed'),
         fingerprint: sha256({ v: 1 }),
         status: 'COMPLETED',
         statusCode: 202,
@@ -1216,7 +1229,7 @@ describe('IdempotencyInterceptor', () => {
         },
       });
       storage.seed({
-        key: 'K-conflict',
+        key: globalRequestKey('K-conflict'),
         fingerprint: sha256({ v: 1 }),
         status: 'PROCESSING',
         createdAt: new Date(),
@@ -1256,7 +1269,7 @@ describe('IdempotencyInterceptor', () => {
         },
       });
       storage.seed({
-        key: 'K-mismatch-observed',
+        key: globalRequestKey('K-mismatch-observed'),
         fingerprint: sha256({ v: 1 }),
         status: 'COMPLETED',
         statusCode: 200,
@@ -1374,7 +1387,7 @@ describe('IdempotencyInterceptor', () => {
       expect(events.map((event) => event.outcome)).toEqual(['bypassed']);
       expect(storage.complete).not.toHaveBeenCalled();
       expect(storage.delete).not.toHaveBeenCalled();
-      expect(await storage.get('K-bypassed')).toMatchObject({
+      expect(await storage.get(globalRequestKey('K-bypassed'))).toMatchObject({
         status: 'PROCESSING',
       });
       warnSpy.mockRestore();
@@ -1418,8 +1431,8 @@ describe('IdempotencyInterceptor', () => {
     class PaymentsController {}
     class RefundsController {}
 
-    // Default = 'endpoint': the interceptor prepends method + actual path.
-    it('scope=endpoint prefixes storage keys with HTTP method and actual request path', async () => {
+    // Default = 'endpoint': the encoded namespace includes method + actual path.
+    it('scope=endpoint encodes HTTP method and actual request path in storage keys', async () => {
       const { interceptor, storage } = buildInterceptor({ scope: 'endpoint' });
       const handler = decoratedHandler({ enabled: true });
       // Override the function name to make the assertion deterministic.
@@ -1440,7 +1453,10 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'POST /orders/123/capture::shared-key',
+        createRequestKey(
+          ['endpoint', [], ['path', 'POST', '/orders/123/capture']],
+          'shared-key',
+        ).key,
         expect.any(String),
         86_400,
       );
@@ -1489,8 +1505,18 @@ describe('IdempotencyInterceptor', () => {
 
       expect(secondResult).toEqual({ id: 'cap_2' });
       const createCalls = storage.create.mock.calls.map(([key]) => key);
-      expect(createCalls).toContain('POST /orders/1/capture::shared-key');
-      expect(createCalls).toContain('POST /orders/2/capture::shared-key');
+      expect(createCalls).toContain(
+        createRequestKey(
+          ['endpoint', [], ['path', 'POST', '/orders/1/capture']],
+          'shared-key',
+        ).key,
+      );
+      expect(createCalls).toContain(
+        createRequestKey(
+          ['endpoint', [], ['path', 'POST', '/orders/2/capture']],
+          'shared-key',
+        ).key,
+      );
     });
 
     it('ignores query strings when scoping endpoint keys', async () => {
@@ -1534,7 +1560,10 @@ describe('IdempotencyInterceptor', () => {
       expect(secondResult).toEqual({ result: 'first' });
       expect(storage.create).toHaveBeenCalledTimes(1);
       expect(storage.create).toHaveBeenCalledWith(
-        'POST /search::query-key',
+        createRequestKey(
+          ['endpoint', [], ['path', 'POST', '/search']],
+          'query-key',
+        ).key,
         expect.any(String),
         86_400,
       );
@@ -1584,18 +1613,32 @@ describe('IdempotencyInterceptor', () => {
       // replayed copy of the payment response.
       expect(refundResult).toEqual({ kind: 'refund' });
 
-      // Both keys were created under different prefixes.
+      // Both keys were created under different endpoint namespaces.
       const createCalls = storage.create.mock.calls.map(([key]) => key);
       expect(createCalls).toContain(
-        'PaymentsController#createHandler::shared-key',
+        createRequestKey(
+          [
+            'endpoint',
+            [],
+            ['handler', 'POST', 'PaymentsController', 'createHandler'],
+          ],
+          'shared-key',
+        ).key,
       );
       expect(createCalls).toContain(
-        'RefundsController#refundHandler::shared-key',
+        createRequestKey(
+          [
+            'endpoint',
+            [],
+            ['handler', 'POST', 'RefundsController', 'refundHandler'],
+          ],
+          'shared-key',
+        ).key,
       );
     });
 
     // Custom scope function
-    it('scope=function applies the custom namespace', async () => {
+    it('scope=function combines custom identity with the endpoint namespace', async () => {
       const { interceptor, storage } = buildInterceptor({
         scope: () => 'tenant-42',
       });
@@ -1603,6 +1646,7 @@ describe('IdempotencyInterceptor', () => {
       const { context } = buildExecutionContext({
         req: {
           method: 'POST',
+          originalUrl: '/payments',
           headers: { 'idempotency-key': 'K1' },
           body: {},
         },
@@ -1613,14 +1657,17 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'tenant-42::K1',
+        createRequestKey(
+          ['endpoint', ['tenant-42'], ['path', 'POST', '/payments']],
+          'K1',
+        ).key,
         expect.any(String),
         86_400,
       );
     });
 
-    // Explicit 'global' scope: raw key, no prefix (legacy behavior).
-    it('scope=global uses the raw header value with no prefix', async () => {
+    // Explicit 'global' scope shares one encoded namespace across endpoints.
+    it('scope=global encodes the key in the global namespace', async () => {
       const { interceptor, storage } = buildInterceptor({ scope: 'global' });
       const handler = decoratedHandler({ enabled: true });
       const { context } = buildExecutionContext({
@@ -1636,7 +1683,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.create).toHaveBeenCalledWith(
-        'K1',
+        globalRequestKey('K1'),
         expect.any(String),
         86_400,
       );
@@ -1672,7 +1719,7 @@ describe('IdempotencyInterceptor', () => {
 
       expect(result).toBe(body);
       expect(storage.complete).toHaveBeenCalledWith(
-        'K-headers',
+        globalRequestKey('K-headers'),
         expect.any(String),
         {
           statusCode: 201,
@@ -1693,7 +1740,7 @@ describe('IdempotencyInterceptor', () => {
       const { interceptor, storage } = buildInterceptor();
       const fp = sha256({ amount: 100 });
       storage.seed({
-        key: 'K-replay-headers',
+        key: globalRequestKey('K-replay-headers'),
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 201,
@@ -1752,7 +1799,7 @@ describe('IdempotencyInterceptor', () => {
       await firstValueFrom(interceptor.intercept(context, next));
 
       expect(storage.complete).toHaveBeenCalledWith(
-        'K-no-headers',
+        globalRequestKey('K-no-headers'),
         expect.any(String),
         {
           statusCode: 201,
@@ -1770,7 +1817,7 @@ describe('IdempotencyInterceptor', () => {
       });
       const fp = sha256({ amount: 100 });
       storage.seed({
-        key: 'K-replay-disabled',
+        key: globalRequestKey('K-replay-disabled'),
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 201,
@@ -1810,7 +1857,7 @@ describe('IdempotencyInterceptor', () => {
       });
       const fp = sha256({ amount: 100 });
       storage.seed({
-        key: 'K-replay-allowlist',
+        key: globalRequestKey('K-replay-allowlist'),
         fingerprint: fp,
         status: 'COMPLETED',
         statusCode: 201,
@@ -1920,7 +1967,7 @@ describe('IdempotencyInterceptor', () => {
         expect(storage.complete).not.toHaveBeenCalled();
         // The successful handler must not become immediately executable again.
         expect(storage.delete).not.toHaveBeenCalled();
-        expect(await storage.get(`K-${name}`)).toMatchObject({
+        expect(await storage.get(globalRequestKey(`K-${name}`))).toMatchObject({
           status: 'PROCESSING',
         });
         expect(warnSpy).toHaveBeenCalledWith(
