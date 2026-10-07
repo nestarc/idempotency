@@ -68,6 +68,7 @@ export const REQUIRED_PACKAGE_FILES = Object.freeze([
   'package/dist/postgres.d.ts',
   'package/sql/init.sql',
   'package/README.md',
+  'package/CHANGELOG.md',
   'package/LICENSE',
 ]);
 

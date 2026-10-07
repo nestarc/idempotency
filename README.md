@@ -1,13 +1,23 @@
-# @nestarc/idempotency
+# NestJS HTTP Idempotency — @nestarc/idempotency
 
-> Idempotency module for NestJS with an explicitly documented draft-07-inspired profile — decorator-based, pluggable storage (memory/Redis/Postgres), response replay, fingerprint validation, processing leases, and observability hooks.
+Prevent duplicate HTTP request handling in NestJS applications with `Idempotency-Key`,
+response replay and request fingerprint validation. This TypeScript package supports
+Express and Fastify, with Redis, PostgreSQL and in-memory storage adapters.
 
 [![CI](https://github.com/nestarc/idempotency/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nestarc/idempotency/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@nestarc/idempotency.svg)](https://www.npmjs.com/package/@nestarc/idempotency)
 [![license](https://img.shields.io/npm/l/@nestarc/idempotency.svg)](./LICENSE)
 [![node](https://img.shields.io/badge/node-22%20%7C%2024-brightgreen.svg)](https://nodejs.org/)
 [![NestJS](https://img.shields.io/badge/NestJS-10.x%20%7C%2011.x-ea2845.svg)](https://nestjs.com/)
-[![provenance](https://img.shields.io/badge/npm-provenance-blue.svg)](https://docs.npmjs.com/generating-provenance-statements)
+
+> **Version: 1.0.0 source documentation.** As checked on 2026-10-07, npm's
+> `latest` is **0.4.0** and 1.0.0 has not been published. For the published package,
+> use the [0.4.0 documentation](https://github.com/nestarc/idempotency/blob/v0.4.0/README.md).
+> The examples below require the 1.0 source build described in [Install](#install).
+
+[Install](#install) · [Quick start](#quick-start) · [Supported versions](#supported-versions) ·
+[Storage adapters](#storage-adapters) · [Configuration](#configuration-reference) ·
+[Upgrade from 0.4](#upgrading-from-04-to-10-unreleased) · [Validation](#validation-and-release-evidence)
 
 ## Why
 
@@ -16,30 +26,51 @@ HTTP mutations (such as `POST` and `PATCH`) can be processed multiple times when
 - A client times out and the user retries the request
 - An API gateway or load balancer auto-retries
 - A flaky mobile network resends a request without realizing the first attempt succeeded
-- Microservices duplicate messages between hops
+- A service retries an HTTP call after losing the response
 
-The result is double charges, duplicate orders, and corrupt state. The IETF draft [`httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) describes a solution: clients send an `Idempotency-Key` header with a unique value, and the server makes retries safe by replaying the original response when the original request completed.
+These retries can cause double charges and duplicate orders. A client supplies an
+`Idempotency-Key` identifying one intended operation. While its completed response
+is retained, a matching retry receives that response without running the handler
+again. An in-flight duplicate receives 409; reusing the key with a different
+request fingerprint receives 422.
 
 `@nestarc/idempotency` provides a NestJS decorator API and pluggable storage for the [supported profile](#ietf-draft-compatible-profile) below. It does not implement every draft requirement. It does not claim full exactly-once execution across your business database transaction; it protects the HTTP mutation boundary and uses token-CAS storage records to prevent stale writers from clobbering newer records.
 
+Use it for HTTP payment commands, order creation and webhook handlers, together
+with durable business IDs and application authorization. It does not intercept
+message-broker consumers or background jobs.
+
 ## Install
 
+Until 1.0 is published, evaluate these APIs using a tarball built from this source
+checkout. An unversioned `npm install @nestarc/idempotency` currently installs
+0.4.0, whose adapter imports and storage formats differ.
+
 ```bash
-npm install @nestarc/idempotency
+# In this 1.0.0 source checkout
+npm ci
+npm run build
+npm pack --ignore-scripts
+
+# In your NestJS application; replace with the generated tarball's actual path
+npm install /absolute/path/to/nestarc-idempotency-1.0.0.tgz
 ```
+
+This creates a local evaluation package. Published releases must pass the
+[release validation gates](#validation-and-release-evidence).
 
 If you plan to use the Redis storage adapter, also install `ioredis`:
 
 ```bash
-npm install ioredis
+npm install 'ioredis@^5'
 ```
 
 If you plan to use the PostgreSQL storage adapter, install `pg` and its
 TypeScript declarations (for TypeScript consumers):
 
 ```bash
-npm install pg
-npm install --save-dev @types/pg
+npm install 'pg@^8.11'
+npm install --save-dev '@types/pg@^8.11'
 ```
 
 Memory needs neither database driver nor database type package. Redis includes
@@ -47,7 +78,7 @@ its own declarations and needs no PostgreSQL packages. These are optional peers;
 install only the driver you use, alongside your application's Nest common/core,
 reflect-metadata and rxjs dependencies.
 
-### Public imports (1.0, unreleased)
+### Public imports
 
 | Import path | Public API | Additional dependency |
 | --- | --- | --- |
@@ -60,32 +91,42 @@ reflect-metadata and rxjs dependencies.
 From 0.4, move Redis/Postgres classes and adapter option types out of root imports
 to the paths above. Move the sweep service and SweepOptions to `/postgres` too.
 Memory and common imports stay the same. Internal `dist/*` and storage-barrel
-paths are not public exports. This is an import change for 1.0; the package
-version is 1.0.0 in this release preparation tree; registry publication is separate.
+paths are not public exports. Follow the [upgrade procedure](#upgrading-from-04-to-10-unreleased)
+before changing a deployment from 0.4 to 1.0.
 
 The root also exports `IdempotencyKeyResolver`, `IdempotencyFingerprintInput`,
 `IdempotencyFingerprintResolver`, `IdempotencyEvent`, `IdempotencyOutcome` and
 `IdempotencyObservabilityOptions`, plus `IdempotencyEventError` and
 `IdempotencyStorageOperation`. Use `import type` for these interfaces and callbacks.
 
-The supported compiler baseline is TypeScript 5.7.3 with `strict: true` and
+## Supported versions
+
+| Component | 1.0 support |
+| --- | --- |
+| Node.js | 22 or 24; Node 20 is no longer supported |
+| NestJS | 10 or 11, with the matching Express or Fastify adapter |
+| TypeScript | 5.7.3 is the validated consumer baseline |
+| Package format | CommonJS; no separate ESM build |
+| Redis driver | `ioredis ^5.0.0`, optional |
+| PostgreSQL driver | `pg ^8.11.0`, optional; TypeScript also needs `@types/pg ^8.11.0` |
+| Nest peers | `@nestjs/common`, `@nestjs/core`, `reflect-metadata`, `rxjs` |
+
+Consumer declarations are checked with `strict: true` and
 `skipLibCheck: false`. CommonJS consumers are checked with `moduleResolution`
 `node` (module `CommonJS`), `node16` (module `Node16`) and `nodenext` (module
 `NodeNext`), with package type `commonjs`. The package still ships CommonJS only;
 ESM builds and bundler resolution are outside this validation scope.
 
-The 1.0 support matrix is Node.js **22 or 24**, NestJS **10 or 11**, and the
-matching Express or Fastify adapter. Node 20 is no longer supported. CI and
-release validation run both real PostgreSQL 16 and Redis 7, reject skipped tests,
+CI and release validation require both real PostgreSQL 16 and Redis 7, reject skipped tests,
 and install the same tarball into isolated Memory/Redis/Postgres consumers.
 Optional driver lower bounds (`ioredis` 5.0.0, `pg` and `@types/pg` 8.11.0) and
 representative versions are tested separately. Exact dependency pins, evidence
-and untested environments are recorded in [S8](docs/1.0.0/work-items/S8-release-validation.md).
+and untested environments are recorded in [S8](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/work-items/S8-release-validation.md).
 
 ## Quick start
 
 This is a local replay demonstration. For real mutations, use the
-[payments, orders and webhook recipes](docs/adoption-recipes.md) with durable
+[payments, orders and webhook recipes](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md) with durable
 business IDs and authentication.
 
 ```ts
@@ -133,20 +174,20 @@ curl -i http://localhost:3000/payments -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: demo-command-1' -d '{"commandId":"demo-command-1","amount":100}'
 ```
 
-The [executable examples](test/consumers/README.md) compile public imports from an
+The [executable examples](https://github.com/nestarc/idempotency/blob/main/test/consumers/README.md) compile public imports from an
 installed tarball and exercise Nest init/close, first request and replay.
 Memory is local to one process and loses records on restart.
 
 A duplicate `POST /payments` with the same `Idempotency-Key` header and matching
 body replays a retained, supported completed response without re-running your
 handler. A processing lease returns 409. Failures, cancellation and expiry need
-the [failure and recovery contract](docs/failure-recovery.md).
+the [failure and recovery contract](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
 
 ### Three ways to wire the interceptor
 
 The module deliberately does **not** auto-register the interceptor. The following
 are changes to the quickstart above; the controller/method examples are placement
-fragments. Complete compiled versions are in the [Memory examples](test/consumers/memory/examples.ts).
+fragments. Complete compiled versions are in the [Memory examples](https://github.com/nestarc/idempotency/blob/main/test/consumers/memory/examples.ts).
 
 ```ts
 // 1. App-global — replace the quickstart module and remove its @UseInterceptors.
@@ -229,7 +270,7 @@ until `processingTtl` expires; retrying after expiry can execute the operation
 again. A source error discards intermediate values and uses token-based error
 cleanup, even if business effects already committed. Subscription cancellation
 does not start completion or deletion for a later handler result; an already
-started storage Promise may still commit. See [failure recovery](docs/failure-recovery.md).
+started storage Promise may still commit. See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
 
 ### Upgrading from 0.4 to 1.0 (unreleased)
 
@@ -261,8 +302,8 @@ instances, then resume. Rollback requires the same protection for commands
 processed by the new version; old code cannot read the new keys or bodies.
 Do not use automatic dual reads, key rotation alone or bulk deletion as a migration.
 Old records generally cannot prove the tenant/user authorization required by
-the new scope. Follow the [executable migration and rollback guide](docs/migration-1.0.md) and
-[D07](docs/1.0.0/decisions.md#d07--10-전환과-롤백-decided).
+the new scope. Follow the [executable migration and rollback guide](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md) and
+[D07](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/decisions.md#d07--10-전환과-롤백-decided).
 
 ## Redis storage
 
@@ -270,7 +311,7 @@ the new scope. Follow the [executable migration and rollback guide](docs/migrati
 import { Module } from '@nestjs/common';
 import { IdempotencyModule } from '@nestarc/idempotency';
 import { RedisStorage } from '@nestarc/idempotency/redis';
-import { Redis } from 'ioredis';
+import Redis from 'ioredis';
 
 const client = new Redis({ host: 'localhost', port: 6379 });
 
@@ -287,7 +328,7 @@ export class AppModule {}
 
 Here `client` belongs to the application. After `await app.close()`, its owner
 must call `await client.quit()` once, after all users have stopped. The adapter
-does not close an injected client. See [Redis lifecycle examples](test/consumers/redis/examples.ts).
+does not close an injected client. See [Redis lifecycle examples](https://github.com/nestarc/idempotency/blob/main/test/consumers/redis/examples.ts).
 
 ### Async registration and connection ownership
 
@@ -319,7 +360,7 @@ export class AppModule {}
 For dependency injection, list the supplying module in `imports` and its tokens
 in `inject`. `useClass` constructs an `IdempotencyOptionsFactory`; `useExisting`
 uses an exported factory from an imported module. Choose one async mechanism.
-The [compiled async examples](test/consumers/common/module-examples.ts) exercise all
+The [compiled async examples](https://github.com/nestarc/idempotency/blob/main/test/consumers/common/module-examples.ts) exercise all
 three mechanisms, including import visibility and init/close.
 
 | Construction | Connection owner and shutdown |
@@ -342,6 +383,10 @@ idempotency. The Postgres adapter ships with the same atomic-NX +
 token-CAS guarantees as Redis, with lazy expiration on `get()` and an
 optional sweep service for active cleanup.
 
+**Create the table before starting the application.** Automatic schema creation
+is disabled by default. Apply the bundled SQL or use one of the
+[schema setup options](#schema-migration) below, then register the adapter:
+
 ```ts
 import { Module } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -361,7 +406,7 @@ export class AppModule {}
 ```
 
 The injected `pool` remains usable after `await app.close()`; its application
-owner then calls `await pool.end()`. [Postgres lifecycle examples](test/consumers/postgres/examples.ts)
+owner then calls `await pool.end()`. [Postgres lifecycle examples](https://github.com/nestarc/idempotency/blob/main/test/consumers/postgres/examples.ts)
 verify both injected and adapter-owned pools against a real database.
 
 ### Schema migration
@@ -382,8 +427,14 @@ Three options, pick whichever fits your tooling:
    new PostgresStorage({ pool, autoCreateSchema: true });
    ```
 
-For existing v0.2.x Postgres installations upgrading to v0.3.0, add the
-response header column once:
+The bundled SQL creates `idempotency_records`. For a custom `tableName`, apply
+a matching migration or call `PostgresStorage.createSchema(pool, tableName)`.
+Use the same table name when constructing the adapter.
+
+The 0.4 → 1.0 upgrade does not change the SQL schema, but requires the separate
+empty namespace and business deduplication described in the [upgrade procedure](#upgrading-from-04-to-10-unreleased).
+Legacy 0.2 tables that never received the 0.3 migration also need the response
+header column:
 
 ```sql
 ALTER TABLE idempotency_records
@@ -422,7 +473,7 @@ export class AppModule {}
 `PostgresSweepService` injects `IDEMPOTENCY_STORAGE`, so it uses the exact
 `PostgresStorage` instance registered by `forRoot` or `forRootAsync`. Register
 this service only with PostgreSQL storage. Its timer stops on Nest close; the
-external pool still belongs to the application. [The executable sweep example](test/consumers/postgres/examples.ts)
+external pool still belongs to the application. [The executable sweep example](https://github.com/nestarc/idempotency/blob/main/test/consumers/postgres/examples.ts)
 checks expiration cleanup, active-row retention and pool ownership.
 
 Or schedule it externally with `pg_cron` (an independently installed extension):
@@ -494,7 +545,7 @@ replays and after permission revocation. Authentication or webhook signature
 verification only inside the handler is bypassed on replay. For webhooks, verify
 the provider signature over the original raw bytes in a guard before resolving
 the event ID. The Express/Fastify
-[executable guard and HMAC examples](test/e2e/request-isolation.e2e-spec.ts)
+[executable guard and HMAC examples](https://github.com/nestarc/idempotency/blob/main/test/e2e/request-isolation.e2e-spec.ts)
 exercise this ordering.
 
 #### Key input
@@ -550,7 +601,7 @@ Choose `processingTtl` to cover the intended execution window, including slow
 dependencies and pauses. Even a lease above p99 can expire while work continues.
 A retry can then acquire the key and overlap the original operation. There is
 no automatic heartbeat; use durable business deduplication and the
-[reconciliation procedure](docs/failure-recovery.md#reconcile-a-payment-command).
+[reconciliation procedure](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md#reconcile-a-payment-command).
 
 ### Errors, timeouts and recovery
 
@@ -566,7 +617,7 @@ does not keep a detached subscription to record later handler results. Business
 Promises can continue, and already-started `create`/`complete`/`delete` Promises
 can still commit without delivering events or a response. HTTP disconnects do
 not necessarily unsubscribe the application chain. See the
-[transition table and timeout placement guide](docs/failure-recovery.md) before
+[transition table and timeout placement guide](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md) before
 enabling automatic retries. A missing record or expired lease is not evidence
 that retrying a business operation is safe.
 
@@ -575,7 +626,7 @@ that retrying a business operation is safe.
 Use `keyResolver` when the stable key comes from a webhook event id or command
 id instead of the `Idempotency-Key` header.
 
-The [webhook recipe](docs/adoption-recipes.md) verifies the original raw bytes
+The [webhook recipe](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md) verifies the original raw bytes
 in a guard, validates the event, then resolves its event ID. It also separates
 event deduplication from business deduplication and out-of-order delivery.
 Do not resolve an event ID from an unverified body or verify only in the handler:
@@ -588,7 +639,7 @@ the default body hash and should return a deterministic semantic fingerprint.
 
 ### Observability
 
-The unreleased 1.0 event contract emits optional outcome events and status headers:
+The 1.0 event contract emits optional outcome events and status headers:
 
 ```ts
 import { IdempotencyModule, type IdempotencyOutcome } from '@nestarc/idempotency';
@@ -656,8 +707,8 @@ and preservation rules. Successful cleanup and the handler error itself emit no
 additional event. A failed or ambiguous write may already have changed storage;
 an event is not proof of the final database state. Pending writes that settle
 after unsubscribe do not deliver an outcome event through the canceled chain.
-See [failure recovery](docs/failure-recovery.md) for cancellation, crash and
-reconciliation rules and [D06](docs/1.0.0/decisions.md#d06--저장소-공통-계약-decided)
+See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md) for cancellation, crash and
+reconciliation rules and [D06](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/decisions.md#d06--저장소-공통-계약-decided)
 for the completed adapter contract.
 
 `onEvent` is best-effort and is not awaited. A synchronous throw or asynchronous
@@ -758,7 +809,7 @@ These checks protect storage ownership; they do not cancel business operations.
 
 ## Error reference
 
-| Status | When                                                                                                                                                                   | IETF rationale                    |
+| Status | When                                                                                                                                                                   | Meaning                           |
 | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 |    400 | Required key is missing, malformed/repeated, or exceeds `maxKeyLength` UTF-8 bytes | client contract |
 |    409 | The record is PROCESSING, or its completed payload is legacy/corrupt/unsupported | concurrent duplicate / safe replay unavailable |
@@ -788,10 +839,14 @@ command ID, identity, endpoint and intended payload stable on retries.
 
 A completed response is retained for `ttl` from completion; a PROCESSING lease
 lasts `processingTtl` from acquisition. Neither duration is a business transaction
-or the retention period of the command ledger. See [failure recovery](docs/failure-recovery.md)
-and [adoption recipes](docs/adoption-recipes.md) for reconciliation examples.
+or the retention period of the command ledger. See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md)
+and [adoption recipes](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md) for reconciliation examples.
 
 ## Storage adapters
+
+Use `MemoryStorage` for local development and tests. For multiple application
+instances, use Redis or PostgreSQL with one shared storage namespace. Choose the
+service whose retention and failure behavior you can operate and monitor.
 
 | Feature          | `MemoryStorage`        | `RedisStorage`         | `PostgresStorage`                        |
 | ---------------- | ---------------------- | ---------------------- | ---------------------------------------- |
@@ -805,6 +860,22 @@ and [adoption recipes](docs/adoption-recipes.md) for reconciliation examples.
 Persistence and failover durability depend on the deployed service configuration.
 Storage coordination does not atomically commit with your business database or
 external provider. Losing or expiring records can permit execution again.
+
+### Adapter options
+
+Pass these options to the storage constructor, separately from module options:
+
+| Adapter | Option | Default / behavior |
+| --- | --- | --- |
+| Redis | `client` or `connection` | Supply an application-owned ioredis client or options for an adapter-owned connection. |
+| Redis | `keyPrefix` | `idempotency:`; use a distinct prefix for separate applications or a 1.0 migration. |
+| PostgreSQL | `pool` or `connection` | Supply an application-owned pg pool or options for an adapter-owned pool. |
+| PostgreSQL | `tableName` | `idempotency_records`; provision a matching table before use. |
+| PostgreSQL | `autoCreateSchema` | `false`; opt in only when automatic DDL is appropriate, such as local development. |
+
+Keep the chosen prefix or table consistent across instances serving the same
+operations. The connection lifecycle is described under
+[connection ownership](#async-registration-and-connection-ownership).
 
 ### Custom storage adapters
 
@@ -827,11 +898,16 @@ opaque response body exactly, then supply that instance as `storage` to
 `forRoot` or the async options factory. An optional `onModuleDestroy` hook must
 close only resources owned by the adapter.
 
-The package ships a **shared contract test suite** at `test/support/shared-storage-contract.ts` (in the source tree, not exported) that encodes every behavioral guarantee above. Custom adapters are encouraged to copy it into their own repo and plug in via `describeStorageContract('MyStorage', factory)` to catch LSP drift before it ships.
+The repository includes a [shared storage contract suite](https://github.com/nestarc/idempotency/blob/main/test/support/shared-storage-contract.ts)
+covering TTL boundaries, record ownership, completion and deletion. It is source
+test code, not part of the npm package. Custom adapter authors can reuse
+`describeStorageContract('MyStorage', factory)`; the factory supplies `storage`,
+`expire` and `cleanup` as documented in that file. Add adapter-specific tests for
+real concurrency, persistence and connection failures as well.
 
 ## IETF draft-compatible profile
 
-This profile is based on the fixed [draft-07 text](https://www.ietf.org/archive/id/draft-ietf-httpapi-idempotency-key-header-07.html), checked 2026-10-07. That document expired on 2026-04-18; it is not a final RFC or a claim of conformance to a later revision. The unreleased 1.0 profile covers:
+This profile is based on the fixed [draft-07 text](https://www.ietf.org/archive/id/draft-ietf-httpapi-idempotency-key-header-07.html), checked 2026-10-07. That document expired on 2026-04-18; it is not a final RFC or a claim of conformance to a later revision. The 1.0 profile covers:
 
 - ✅ `Idempotency-Key` header recognition (configurable name); raw opaque strings, not Structured Field parsing
 - ✅ Custom application key resolvers for webhook event ids and command ids
@@ -854,12 +930,8 @@ Errors use Nest exceptions, without automatic `application/problem+json`, a
 own key, expiry and retry policies. Streams, SSE and manual responses are outside
 the supported replay profile. A decorator does not make an operation exactly-once.
 
-Deferred to future versions:
-
-- 🚧 Transactional integration (`@TransactionalIdempotent`)
-- 🚧 Dual ESM/CJS build
-- 🚧 Business-error caching option
-- 🚧 Swagger/OpenAPI integration
+Transactional integration, a dual ESM/CJS build, business-error caching and
+automatic Swagger/OpenAPI integration are outside the current API.
 
 ## Caveats
 
@@ -867,15 +939,45 @@ Deferred to future versions:
 - **Custom fingerprints are caller-defined.** A resolver must be deterministic for the same semantic request. Non-deterministic values such as timestamps or random ids will cause false 422 mismatches.
 - **Processing TTL is a lease, not a transaction.** A short `processingTtl` helps recover stuck records, but if it is shorter than real handler execution time, a retry can acquire the key while the first request is still running.
 - **Replay requires the supported response boundary.** Register idempotency before response transformers. Unsupported values retain their PROCESSING lease and are not replayed; see the response contract and upgrade procedure above.
-- **Token CAS protects record ownership.** Expired or replaced requests cannot complete a newer record, and repeated completion cannot overwrite an established response. Work may still overlap after lease expiry; see the [failure and recovery guide](docs/failure-recovery.md).
+- **Token CAS protects record ownership.** Expired or replaced requests cannot complete a newer record, and repeated completion cannot overwrite an established response. Work may still overlap after lease expiry; see the [failure and recovery guide](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
 
-## Roadmap
+## Validation and release evidence
 
-- v0.2 (shipped): PostgreSQL storage adapter (`pg`), opt-in sweep service, bundled SQL DDL
-- v0.3 (shipped): Stable JSON fingerprinting, safe response header replay, Fastify verification, real Redis smoke coverage, hardened release validation
-- v0.4 (shipped): Processing leases, custom key resolvers, custom fingerprint resolvers, observability events/status headers, draft-compatible documentation cleanup
-- v1.0 (unreleased): Response safety, identity isolation, optional-driver imports, storage/TTL and failure contracts, executable adoption and migration guidance. Release matrix, gates and validation evidence are tracked in [S8](docs/1.0.0/work-items/S8-release-validation.md).
-- Future candidates (not promised for 1.0): Transactional integration (`@TransactionalIdempotent`), business-error caching option, Swagger/OpenAPI integration, service-level idempotency helpers
+The [test guide](https://github.com/nestarc/idempotency/blob/main/test/README.md) records the 2026-10-07 audit, reviewed files and
+validation limits. Two source environments—Node 24 / Nest 11 with representative
+drivers and Node 22 / Nest 10 with minimum supported drivers—each passed **46 suites
+and 1,093 tests with zero skips**, using real PostgreSQL 16 and Redis 7. Installed
+tarball consumers separately checked public imports, strict declarations and real
+Memory/Redis/Postgres HTTP behavior. Seven selected source mutation probes failed
+the expected assertions; this is evidence for those checks, not a guarantee that
+all defects are detected.
+
+The [release workflow](https://github.com/nestarc/idempotency/blob/main/.github/workflows/release.yml) requires all eight Node
+22/24 × Nest 10/11 × minimum/representative peer combinations to validate one
+tarball before publication. It checks the test inventory, rejects skips and
+verifies artifact checksums. The two audit environments above do not replace that
+complete release matrix. [S8](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/work-items/S8-release-validation.md)
+records the release procedure and prior evidence.
+
+Tagged releases are configured to publish the verified tarball through npm
+Trusted Publishing with provenance. Verify the attestation on the **specific
+published npm version**; workflow configuration alone does not attest an
+unpublished build. Benchmarks have separate [reproduction instructions and
+measurement limits](https://github.com/nestarc/idempotency/blob/main/bench/README.md).
+
+## Documentation and contributing
+
+- [Changelog](./CHANGELOG.md): breaking changes and version history.
+- [Adoption recipes](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md): payments, orders and signed webhooks.
+- [Failure and recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md): cancellation, storage outages and reconciliation.
+- [Upgrade and rollback](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md): the 0.4 → 1.0 transition.
+- [Contributing](https://github.com/nestarc/idempotency/blob/main/CONTRIBUTING.md): development, tests and release checks.
+- [Report a bug](https://github.com/nestarc/idempotency/issues/new?template=bug_report.yml): include versions and a minimal reproduction; remove secrets and customer data.
+
+Extended guides, tests and benchmark sources live in the repository; npm includes
+this README, the changelog, license, compiled package and SQL schema. Source links
+target the repository's `main` branch. Use the tagged 0.4 documentation linked
+above for the currently published package.
 
 ## License
 

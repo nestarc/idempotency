@@ -1,10 +1,10 @@
 {
   "name": "@nestarc/idempotency",
   "version": "1.0.0",
-  "description": "HTTP idempotency for NestJS — decorator-based, pluggable storage (memory/Redis/Postgres), response replay and a documented draft-07 profile.",
+  "description": "NestJS HTTP idempotency with Idempotency-Key, response replay, and Redis, PostgreSQL or memory storage for Express and Fastify.",
   "license": "MIT",
   "author": "nestarc",
-  "homepage": "https://nestarc.dev",
+  "homepage": "https://github.com/nestarc/idempotency#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nestarc/idempotency.git"
@@ -14,11 +14,19 @@
   },
   "keywords": [
     "nestjs",
+    "nestjs-module",
     "idempotency",
+    "idempotency-key",
     "idempotent",
+    "request-deduplication",
     "http",
     "ietf",
+    "typescript",
+    "express",
+    "fastify",
     "redis",
+    "postgresql",
+    "postgres",
     "interceptor",
     "decorator",
     "nestarc"
@@ -55,6 +63,7 @@
     "dist",
     "sql",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

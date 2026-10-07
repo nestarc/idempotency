@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the README's installation, supported versions and validation evidence;
+  distinguish the 1.0 source build from the published 0.4 package. Improve npm
+  description and search keywords, point package metadata to the maintained
+  repository documentation, and include this changelog in the tarball with a
+  required-file release check.
+
 ### Fixed
 
 - Strengthen tests with real concurrency gates, completion acknowledgement,
@@ -25,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Executable adoption examples for sync/async registration, connection ownership,
   serialization, authenticated tenant scope, observability and PostgreSQL sweep.
   Add payment/order/webhook recipes, a client action table and a tested
-  [0.4 → 1.0 upgrade/rollback runbook](docs/migration-1.0.md).
+  [0.4 → 1.0 upgrade/rollback runbook](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md).
 
 ### Fixed
 
@@ -82,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callback failures remain isolated from request outcomes. Neither hash is an
   anonymity guarantee or suitable as a metric label.
 - Document handler-error token deletion, outer cancellation and crash recovery
-  in the [failure lifecycle guide](docs/failure-recovery.md). Cancellation does
+  in the [failure lifecycle guide](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md). Cancellation does
   not detach business execution for later recording; already-started storage
   Promises may still commit without a delivered outcome. Ambiguous writes and
   lease expiry require application-owned business reconciliation.
@@ -118,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opaque string, including empty responses. Legacy/corrupt records return 409
   without re-execution. Custom adapters must preserve payloads unchanged.
   Old/new readers and writers must not overlap during deployment or rollback;
-  follow the [D07 migration runbook](docs/migration-1.0.md). This response-body change
+  follow the [D07 migration runbook](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md). This response-body change
   itself does not alter keys; the S3 key transition above does. No schema change.
 - Added class-transformer 0.5.1 as a development dependency for Express/Fastify
   serialization regression tests. No new runtime dependency or public export.

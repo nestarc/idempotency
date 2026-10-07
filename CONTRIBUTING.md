@@ -133,9 +133,12 @@ Releases are driven by git tags that match `v*.*.*` and fire the
    standard Keep-a-Changelog sub-headings (`Added`, `Changed`, `Fixed`,
    `Removed`, `Security`).
 2. **Bump `package.json`.** Match the version used in the CHANGELOG
-   heading exactly. The release workflow verifies this.
-3. **Commit** with a message like `chore: release v0.1.4`.
-4. **Tag** the commit: `git tag v0.1.4 && git push origin v0.1.4`.
+   heading exactly and update the root version in `package-lock.json`. The release
+   workflow verifies the package version. Update the README release-status notice
+   and install command for the version being published; verify linked source
+   guides are available on GitHub before tagging.
+3. **Commit** with a message like `chore: release vX.Y.Z` (substitute the version).
+4. **Tag** the commit with the matching `vX.Y.Z` version.
 5. **Push** main + the tag. The `release.yml` workflow will:
    - Verify the tag matches `package.json`.
    - Build and pack once, then validate that artifact in all eight cells.
@@ -204,7 +207,9 @@ required service, test, consumer and artifact evidence.
 
 Please do **not** open a public issue for a vulnerability that could
 allow duplicate execution, key leakage, or other correctness problems.
-Email the maintainer directly (see the `author` field in
-`package.json`) or use GitHub's private vulnerability reporting.
+Use GitHub's private vulnerability reporting when it is enabled. If that option
+is unavailable, open an issue requesting a private reporting channel without
+including vulnerability details, reproduction steps or affected data. The package
+metadata does not list a maintainer email address.
 
 Thanks!

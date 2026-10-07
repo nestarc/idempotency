@@ -400,6 +400,13 @@ test('missing shipped SQL fails despite a valid recalculated checksum', () => {
     /Required tarball file missing/,
   );
 });
+test('missing shipped changelog fails despite a valid recalculated checksum', () => {
+  const candidate = packedFixture('missing-changelog', 'package/CHANGELOG.md');
+  assert.throws(
+    () => verifyArtifact(candidate.manifestPath, commit),
+    /Required tarball file missing: package\/CHANGELOG\.md/,
+  );
+});
 test('artifact manifest cannot reference a tarball outside its artifact directory', () => {
   const candidate = packedFixture('unsafe-path');
   candidate.manifest.tarball = '../candidate.tgz';
