@@ -312,3 +312,16 @@ manifest 누락·tarball 누락·변조·commit 불일치도 실제 verify-artif
 위 S8 검증 commit·tarball·SHA-256과 JSON은 **bump 이전 0.4.0의 역사적 증거**로 그대로 보존한다.
 새 버전은 다른 artifact이므로 기존 checksum/8개 cell 결과를 1.0.0 게시 증거로 재사용하지 않는다.
 최종 clean commit에서 공통 release gate를 다시 실행한다. 이번 bump에서 tag/push/publish는 수행하지 않았다.
+
+### 2026-10-07 GitHub Actions CI 검증
+
+커밋 `2d0af38bebbb31ba8f0651ce2208625c60e0b346`의
+[CI 실행 37633224775](https://github.com/nestarc/idempotency/actions/runs/37633224775)이
+`completed / success`로 종료됐다. 빌드 1개, Node22/24 × Nest10/11 ×
+minimum/representative 8개 셀, 최종 동일 artifact 검증 1개 등 **10개 작업이 모두 성공**했다.
+GitHub의 Ubuntu runner와 PostgreSQL16/Redis7 서비스에서 전체 소스·설치 소비자 검증을
+수행하고 `s8-validated-candidate`를 보존했다. 이 기록은 앞선 로컬 검증과 별개의 원격 실행 증거다.
+
+실제 `v1.0.0` 출시는 README 설치 안내와 CHANGELOG를 확정한 태그 커밋에서
+Release workflow 전체 검증을 다시 통과해야 한다. CI 성공만으로 npm 게시나
+provenance, GitHub Release 생성을 완료한 것으로 보지 않는다.

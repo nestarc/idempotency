@@ -10,14 +10,14 @@ Express and Fastify, with Redis, PostgreSQL and in-memory storage adapters.
 [![node](https://img.shields.io/badge/node-22%20%7C%2024-brightgreen.svg)](https://nodejs.org/)
 [![NestJS](https://img.shields.io/badge/NestJS-10.x%20%7C%2011.x-ea2845.svg)](https://nestjs.com/)
 
-> **Version: 1.0.0 source documentation.** As checked on 2026-10-07, npm's
-> `latest` is **0.4.0** and 1.0.0 has not been published. For the published package,
-> use the [0.4.0 documentation](https://github.com/nestarc/idempotency/blob/v0.4.0/README.md).
-> The examples below require the 1.0 source build described in [Install](#install).
+> **Version 1.0.** Upgrading from 0.4 changes adapter imports, storage formats and
+> runtime support. Follow the [upgrade procedure](#upgrading-from-04-to-10)
+> before deploying. The [0.4.0 documentation](https://github.com/nestarc/idempotency/blob/v0.4.0/README.md)
+> remains available for applications on that version.
 
 [Install](#install) · [Quick start](#quick-start) · [Supported versions](#supported-versions) ·
 [Storage adapters](#storage-adapters) · [Configuration](#configuration-reference) ·
-[Upgrade from 0.4](#upgrading-from-04-to-10-unreleased) · [Validation](#validation-and-release-evidence)
+[Upgrade from 0.4](#upgrading-from-04-to-10) · [Validation](#validation-and-release-evidence)
 
 ## Why
 
@@ -42,22 +42,12 @@ message-broker consumers or background jobs.
 
 ## Install
 
-Until 1.0 is published, evaluate these APIs using a tarball built from this source
-checkout. An unversioned `npm install @nestarc/idempotency` currently installs
-0.4.0, whose adapter imports and storage formats differ.
+Install the 1.0 package in a NestJS application running a
+[supported Node and Nest version](#supported-versions):
 
 ```bash
-# In this 1.0.0 source checkout
-npm ci
-npm run build
-npm pack --ignore-scripts
-
-# In your NestJS application; replace with the generated tarball's actual path
-npm install /absolute/path/to/nestarc-idempotency-1.0.0.tgz
+npm install '@nestarc/idempotency@^1.0.0'
 ```
-
-This creates a local evaluation package. Published releases must pass the
-[release validation gates](#validation-and-release-evidence).
 
 If you plan to use the Redis storage adapter, also install `ioredis`:
 
@@ -91,7 +81,7 @@ reflect-metadata and rxjs dependencies.
 From 0.4, move Redis/Postgres classes and adapter option types out of root imports
 to the paths above. Move the sweep service and SweepOptions to `/postgres` too.
 Memory and common imports stay the same. Internal `dist/*` and storage-barrel
-paths are not public exports. Follow the [upgrade procedure](#upgrading-from-04-to-10-unreleased)
+paths are not public exports. Follow the [upgrade procedure](#upgrading-from-04-to-10)
 before changing a deployment from 0.4 to 1.0.
 
 The root also exports `IdempotencyKeyResolver`, `IdempotencyFingerprintInput`,
@@ -272,7 +262,7 @@ cleanup, even if business effects already committed. Subscription cancellation
 does not start completion or deletion for a later handler result; an already
 started storage Promise may still commit. See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
 
-### Upgrading from 0.4 to 1.0 (unreleased)
+### Upgrading from 0.4 to 1.0
 
 All scope modes now use versioned storage keys; old raw and `scope::key` records
 have no fallback lookup, automatic move or deletion. Response bodies
@@ -432,7 +422,7 @@ a matching migration or call `PostgresStorage.createSchema(pool, tableName)`.
 Use the same table name when constructing the adapter.
 
 The 0.4 → 1.0 upgrade does not change the SQL schema, but requires the separate
-empty namespace and business deduplication described in the [upgrade procedure](#upgrading-from-04-to-10-unreleased).
+empty namespace and business deduplication described in the [upgrade procedure](#upgrading-from-04-to-10).
 Legacy 0.2 tables that never received the 0.3 migration also need the response
 header column:
 
@@ -959,6 +949,10 @@ verifies artifact checksums. The two audit environments above do not replace tha
 complete release matrix. [S8](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/work-items/S8-release-validation.md)
 records the release procedure and prior evidence.
 
+The [2026-10-07 CI run](https://github.com/nestarc/idempotency/actions/runs/37633224775)
+passed all eight combinations and the final artifact gate for commit `2d0af38`.
+Each release tag runs the full gate again for its own commit and tarball.
+
 Tagged releases are configured to publish the verified tarball through npm
 Trusted Publishing with provenance. Verify the attestation on the **specific
 published npm version**; workflow configuration alone does not attest an
@@ -976,8 +970,8 @@ measurement limits](https://github.com/nestarc/idempotency/blob/main/bench/READM
 
 Extended guides, tests and benchmark sources live in the repository; npm includes
 this README, the changelog, license, compiled package and SQL schema. Source links
-target the repository's `main` branch. Use the tagged 0.4 documentation linked
-above for the currently published package.
+target the repository's `main` branch. For an older installed version, use the
+documentation under its matching Git tag, such as the 0.4 documentation above.
 
 ## License
 

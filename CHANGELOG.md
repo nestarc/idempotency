@@ -6,13 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [1.0.0] - 2026-10-07
 
-- Refresh the README's installation, supported versions and validation evidence;
-  distinguish the 1.0 source build from the published 0.4 package. Improve npm
-  description and search keywords, point package metadata to the maintained
-  repository documentation, and include this changelog in the tarball with a
-  required-file release check.
+### Added
+
+- Executable adoption examples for sync/async registration, connection ownership,
+  serialization, authenticated tenant scope, observability and PostgreSQL sweep.
+  Add payment/order/webhook recipes, a client action table and a tested
+  [0.4 → 1.0 upgrade/rollback runbook](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md).
 
 ### Fixed
 
@@ -25,18 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before accepting latency samples. Isolate each run's Redis keys and PostgreSQL
   schema instead of truncating the default table, and fail on service or cleanup
   errors. Add bounded requests, Express/Fastify coverage and reproducible JSON reports.
-
-## [1.0.0] - 2026-10-07
-
-### Added
-
-- Executable adoption examples for sync/async registration, connection ownership,
-  serialization, authenticated tenant scope, observability and PostgreSQL sweep.
-  Add payment/order/webhook recipes, a client action table and a tested
-  [0.4 → 1.0 upgrade/rollback runbook](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md).
-
-### Fixed
-
 - Use the ioredis default export in public declarations so Redis consumers
   compile with the supported ioredis 5.0.0 lower bound.
 - Inject the configured `IDEMPOTENCY_STORAGE` into `PostgresSweepService`, fixing
@@ -75,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refresh the README's installation, supported versions, upgrade guidance and
+  validation evidence for the 1.0 API. Improve npm description and search keywords,
+  point package metadata to the maintained repository documentation, and include
+  this changelog in the tarball with a required-file release check.
 - **Breaking runtime support change:** support Node.js 22 and 24
   (`^22.0.0 || ^24.0.0`); Node.js 20 is no longer supported.
 - Share CI and release validation across all eight Node 22/24 × Nest 10/11 ×
