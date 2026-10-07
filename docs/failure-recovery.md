@@ -96,7 +96,8 @@ business side effects from that old worker. `stale` is a storage ownership resul
 not confirmation that business work failed.
 
 These rules also apply to custom adapters. Full TTL range and cross-adapter
-release validation remain tracked in [S6](1.0.0/work-items/S6-storage-contract.md).
+adapter verification is recorded in [S6](1.0.0/work-items/S6-storage-contract.md);
+final release validation remains [S8](1.0.0/work-items/S8-release-validation.md).
 
 ## Crash boundaries
 

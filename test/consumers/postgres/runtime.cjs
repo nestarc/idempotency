@@ -5,6 +5,7 @@ const { MemoryStorage } = require('@nestarc/idempotency');
 const { PostgresStorage, PostgresSweepService } = require('@nestarc/idempotency/postgres');
 const { Pool } = require('pg');
 const { assertAbsent, assertPublicPaths, bootAndSmoke, run } = require('./common/runtime.cjs');
+const { runPostgresExamples } = require('./compiled/examples');
 
 run(async () => {
   assertAbsent('ioredis');
@@ -29,6 +30,7 @@ run(async () => {
   try {
     const storage = new PostgresStorage({ pool, tableName, autoCreateSchema: true });
     await bootAndSmoke(storage, 'postgres');
+    await runPostgresExamples(pool, tableName, process.env.TEST_DATABASE_URL);
   } finally {
     try {
       await pool.query(`DROP TABLE IF EXISTS "${tableName}"`);

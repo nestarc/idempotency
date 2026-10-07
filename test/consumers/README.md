@@ -1,6 +1,6 @@
 # 배포 tarball 소비자 검증
 
-소스 저장소 밖의 독립 프로젝트에 실제 `npm pack` tarball을 설치하고, 공개 import 경로·선택 의존성·strict TypeScript·Nest 부팅/종료를 검사한다. 실행기는 [`scripts/consumer-package.mjs`](../../scripts/consumer-package.mjs)다.
+소스 저장소 밖의 독립 프로젝트에 실제 `npm pack` tarball을 설치하고, 공개 import 경로·선택 의존성·strict TypeScript·Nest 부팅/종료를 검사한다. README의 도입 예제는 TypeScript로 타입 검사한 **동일한 파일을 emit하여 실행**한다. 실행기는 [`scripts/consumer-package.mjs`](../../scripts/consumer-package.mjs)다.
 
 ## 실행
 
@@ -21,21 +21,22 @@ node scripts/consumer-package.mjs --baseline /absolute/path/baseline-0.4.0.tgz
 node scripts/consumer-package.mjs --skip-services
 ```
 
-`--baseline`은 기존 루트 MemoryStorage import와 선언 파일의 드라이버 의존성 실패를 자동 재현한다. `--skip-services`는 명시적인 부분 검증이다. Redis/PG 소비자도 공식 어댑터를 import하고 타입 검사를 수행하지만, Nest 부팅에는 MemoryStorage를 사용하며 실제 어댑터 smoke를 `SKIP`으로 기록한다. 서비스 없이 실행한 결과만으로 S2 또는 S8의 실제 어댑터 검증을 완료 처리하지 않는다.
+`--baseline`은 기존 루트 MemoryStorage import와 선언 파일의 드라이버 의존성 실패를 자동 재현한다. `--skip-services`는 명시적인 부분 검증이다. Redis/PG 소비자도 공식 어댑터와 예제를 import하고 타입 검사를 수행하지만, Nest 부팅에는 MemoryStorage를 사용하며 실제 어댑터·sweep·외부 연결 소유권 smoke를 `SKIP`으로 기록한다. 서비스 없이 실행한 결과만으로 S2, S7 또는 S8의 실제 어댑터 검증을 완료 처리하지 않는다. Memory HTTP 예제는 이 옵션에서도 실행하므로 loopback port를 열 수 있어야 한다.
 
 ## Fixture 구조와 설치 계약
 
-각 `memory/`, `redis/`, `postgres/` 디렉터리에는 독립 `package.json`, `tsconfig.json`, `consumer.ts`, `runtime.cjs`가 있다. 실행기는 선택한 디렉터리의 내용을 격리 프로젝트 루트에 복사하고 공통 파일은 `common/`으로 복사한다. 따라서 소스 위치에서 직접 `tsc`를 실행하는 대신 실행기를 사용한다.
+각 `memory/`, `redis/`, `postgres/` 디렉터리에는 독립 `package.json`, `tsconfig.json`, `consumer.ts`, `examples.ts`, `runtime.cjs`가 있다. 실행기는 선택한 디렉터리의 내용을 격리 프로젝트 루트에 복사하고 공통 파일은 `common/`으로 복사한다. 따라서 소스 위치에서 직접 `tsc`를 실행하는 대신 실행기를 사용한다. `examples.ts`와 공통 등록 예제는 `compiled/`에 emit하고 `runtime.cjs`에서 호출한다. Memory의 `quickstart.ts`는 tarball 안의 README `// app.module.ts` 블록과 줄바꿈·앞뒤 공백을 제외한 동일성을 검사한다. 문서 예제를 수정하면 이 파일도 함께 갱신한다.
 
-| 항목                              | 고정 버전 / 계약                                                                                |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Node                              | 패키지의 Node >=20 지원 범위 안에서 실행 환경 버전을 기록                                       |
-| Nest common/core/platform-express | 각각 11.1.18                                                                                    |
-| reflect-metadata / rxjs           | 0.2.2 / 7.8.2                                                                                   |
-| TypeScript / @types/node          | 5.7.3 / 20.19.39                                                                                |
-| Memory                            | `pg`, `ioredis`, `@types/pg` 모두 없음                                                          |
-| Redis                             | `ioredis` 5.10.1, `pg`와 `@types/pg` 없음                                                       |
-| Postgres                          | 처음에는 `pg` 8.20.0만 설치하여 타입 실패를 확인한 다음 `@types/pg` 8.20.0 추가; `ioredis` 없음 |
+| 항목                                      | 고정 버전 / 계약                                                                                |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Node                                      | 패키지의 Node >=20 지원 범위 안에서 실행 환경 버전을 기록                                       |
+| Nest common/core/platform-express/testing | 각각 11.1.18                                                                                    |
+| Memory serializer 예제                    | `class-transformer` 0.5.1                                                                       |
+| reflect-metadata / rxjs                   | 0.2.2 / 7.8.2                                                                                   |
+| TypeScript / @types/node                  | 5.7.3 / 20.19.39                                                                                |
+| Memory                                    | `pg`, `ioredis`, `@types/pg` 모두 없음                                                          |
+| Redis                                     | `ioredis` 5.10.1, `pg`와 `@types/pg` 없음                                                       |
+| Postgres                                  | 처음에는 `pg` 8.20.0만 설치하여 타입 실패를 확인한 다음 `@types/pg` 8.20.0 추가; `ioredis` 없음 |
 
 TypeScript는 `strict: true`, `skipLibCheck: false`에서 `node`, `node16`, `nodenext` 모드를 검사한다. 이는 현재 CommonJS 배포물을 소비하는 검사이며 ESM 배포물 제공이나 모든 TypeScript/Nest 버전의 지원을 입증하지 않는다.
 
@@ -43,10 +44,22 @@ TypeScript는 `strict: true`, `skipLibCheck: false`에서 `node`, `node16`, `nod
 
 Memory 런타임은 DB 드라이버 없이 두 어댑터 경로를 import할 수 있는지, `connection`으로 생성할 때 빠진 드라이버와 설치 명령을 설명하는 오류가 발생하는지도 검사한다. 실제 Redis/PG smoke는 Nest `create/init/close` 안에서 `create/get/complete/delete`, 중복 생성 차단, 응답 보존을 검사한다. Redis는 실행별 prefix를 사용하고 클라이언트를 닫는다. Postgres는 실행별 테이블을 만들고 검사 후 삭제하며 pool을 닫는다.
 
+## S7 실행 가능한 도입 예제
+
+| 예제 파일                                                | 실제 검증 범위                                                                                                                                                                                                                                 |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`common/module-examples.ts`](common/module-examples.ts) | `forRoot`와 `forRootAsync`의 `useFactory`/`useClass`/`useExisting`; 공식 storage/options token, imports/inject 연결, factory 인스턴스 재사용, TestModule compile/init/close                                                                    |
+| [`memory/quickstart.ts`](memory/quickstart.ts)           | 배포 README 코드와 동일성 검사; 그대로 compile/init; curl 예제와 같은 첫 요청 201 및 정상 replay; close                                                                                                                                        |
+| [`memory/examples.ts`](memory/examples.ts)               | quickstart의 전역/컨트롤러/메서드 interceptor 등록; HTTP 201 및 정상 replay; idempotency→serializer 순서와 제외 필드 미노출; payload 변경 422; 검증된 tenant/user 별 격리; 인증 회수 후 replay 전에 401; 고정 outcome 관측                     |
+| [`redis/examples.ts`](redis/examples.ts)                 | 공식 `new RedisStorage({ client, keyPrefix })`; 모든 sync/async 모듈 등록; Nest close 뒤 외부 client PING 성공; async `connection`으로 만든 실제 client는 close 뒤 end 상태                                                                    |
+| [`postgres/examples.ts`](postgres/examples.ts)           | 공식 `new PostgresStorage({ pool })`; 모든 sync/async 모듈 등록; README sweep provider wiring compile/init/close; 동일 Pool로 실제 만료 row만 제거; Nest close 뒤 외부 Pool SELECT 성공; async `connection`으로 만든 실제 Pool은 close 뒤 종료 |
+
+Memory의 인증 토큰 목록은 테스트용 verifier다. 실제 서비스는 자신이 검증한 인증/권한 정보를 사용한다. HTTP 예제의 결제 handler는 영속 업무 원장이나 실제 결제 provider가 아니며, 업무 중복 방지와 결과 불명 조정은 [도입 recipe](../../docs/adoption-recipes.md) 및 해당 회귀 검증의 범위다. `client`/`pool`로 주입한 외부 연결은 호출자가 마지막 `quit()`/`end()`를 수행한다. fixture는 Nest 종료가 이 외부 연결을 닫지 않았음을 확인한 뒤 정리한다. `connection` 구성은 공개 `clientFactory`/`poolFactory`로 실제 생성된 연결을 관찰하고 Nest가 어댑터 소유 연결을 종료했는지 별도로 확인한다.
+
 ## 격리와 증거
 
 실행기는 macOS의 `/private/tmp/idempotency-consumers-*` 또는 Linux의 `/tmp/idempotency-consumers-*`에 프로젝트와 결과를 보존한다. `NODE_PATH`와 `NODE_OPTIONS`를 제거하고 Node의 전역 검색 경로를 끄며, 상위 `node_modules`와 설치 패키지 symlink가 없는지 검사한다. 별도 lockfile을 생성한 뒤 `npm ci`로 설치한다.
 
 실행 결과 디렉터리에는 tarball SHA-256, 실행 환경, Git 기준점과 working tree 상태, `summary.json`, 명령별 로그, tarball 파일 목록, 소비자별 `package-lock.json`과 설치 목록이 남는다. 직접 의존성은 fixture에서 고정되며 전이 의존성까지 같은 설치를 재현하려면 해당 실행에서 보존한 lockfile을 사용한다.
 
-S8은 성공/기대된 실패/생략 결과와 실제 서비스 환경을 함께 인계받아 최종 지원 matrix를 다시 실행한다. 최종 증거는 [S2 작업 문서](../../docs/1.0.0/work-items/S2-consumer-package.md)와 [S8 작업 문서](../../docs/1.0.0/work-items/S8-release-validation.md)에 기록한다.
+S8은 성공/기대된 실패/생략 결과와 실제 서비스 환경을 함께 인계받아 최종 지원 matrix를 다시 실행한다. 최종 증거는 [S2 작업 문서](../../docs/1.0.0/work-items/S2-consumer-package.md), [S7 작업 문서](../../docs/1.0.0/work-items/S7-adoption-docs.md), [S8 작업 문서](../../docs/1.0.0/work-items/S8-release-validation.md)에 기록한다.

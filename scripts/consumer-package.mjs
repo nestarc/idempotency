@@ -211,6 +211,22 @@ function compile(variant, directory, options = {}) {
   }
 }
 
+function verifyReadmeQuickstart(directory) {
+  const readme = readFileSync(
+    join(directory, 'node_modules/@nestarc/idempotency/README.md'),
+    'utf8',
+  ).replaceAll('\r\n', '\n');
+  const quickstart = readme.match(/```ts\n(\/\/ app\.module\.ts\n[\s\S]*?)\n```/);
+  assert(quickstart, 'Packaged README must contain the complete // app.module.ts quickstart');
+  const fixture = readFileSync(join(directory, 'quickstart.ts'), 'utf8').replaceAll('\r\n', '\n');
+  assert.equal(
+    fixture.trim(),
+    quickstart[1].trim(),
+    'README quickstart and executed fixture drifted',
+  );
+  record('memory-readme-quickstart-match', 'pass');
+}
+
 function install(variant, directory, phase) {
   execute(
     `${variant}-${phase}-lock`,
@@ -292,6 +308,7 @@ try {
       manifest.dependencies['@nestarc/idempotency'] = `file:${tarball}`;
       writeFileSync(packagePath, JSON.stringify(manifest, null, 2) + '\n');
       install(variant, directory, variant === 'postgres' ? 'without-pg-types' : 'initial');
+      if (!baseline && variant === 'memory') verifyReadmeQuickstart(directory);
       const installedManifest = JSON.parse(
         readFileSync(join(directory, 'node_modules/@nestarc/idempotency/package.json'), 'utf8'),
       );
@@ -348,6 +365,23 @@ try {
         );
       }
       if (!baseline) {
+        // Run the very TypeScript modules checked above, so documentation
+        // examples cannot pass by compiling unused code beside a different JS fixture.
+        execute(
+          `${variant}-examples-emit`,
+          process.execPath,
+          [
+            '--no-global-search-paths',
+            'node_modules/typescript/bin/tsc',
+            '-p',
+            'tsconfig.json',
+            '--noEmit',
+            'false',
+            '--outDir',
+            'compiled',
+          ],
+          directory,
+        );
         execute(
           `${variant}-runtime`,
           process.execPath,

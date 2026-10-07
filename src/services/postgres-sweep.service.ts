@@ -7,7 +7,10 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 
-import { IDEMPOTENCY_SWEEP_OPTIONS } from '../idempotency.constants';
+import {
+  IDEMPOTENCY_STORAGE,
+  IDEMPOTENCY_SWEEP_OPTIONS,
+} from '../idempotency.constants';
 import { PostgresStorage, quoteIdent } from '../storage/postgres.storage';
 import { logDiagnostic } from '../utils/observability';
 
@@ -37,6 +40,9 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
 
   constructor(
+    // Reuse the adapter registered by forRoot/forRootAsync; the root module
+    // deliberately has no PostgreSQL-specific class provider or import.
+    @Inject(IDEMPOTENCY_STORAGE)
     private readonly storage: PostgresStorage,
     @Optional()
     @Inject(IDEMPOTENCY_SWEEP_OPTIONS)

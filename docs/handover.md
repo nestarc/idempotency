@@ -1,5 +1,12 @@
 # @nestarc/idempotency — 핸드오버 문서
 
+> 이 문서는 2026-04-09 설계 당시의 역사 기록이며 현재 API·운영 보장의 기준이 아닙니다.
+> 현재 설치/지원 계약은 [README](../README.md), 전환은 [1.0 migration](migration-1.0.md),
+> 실패와 결과 불명 처리는 [failure recovery](failure-recovery.md), 개발 상태는
+> [1.0 작업판](1.0.0/README.md)을 따릅니다. 아래의 at-most-once·durability 표현,
+> 옛 storage 옵션·import·응답 형식과 미구현 후보 API를 도입 예제로 복사하지 마세요.
+
+
 > **작성일**: 2026-04-09
 > **목적**: 다음 세션(Claude Code 등)에서 바로 구현을 시작할 수 있도록 설계 결정사항과 컨텍스트를 정리
 > **관련 인프라**: npm org `@nestarc`, 도메인 `nestarc.dev`, GitHub org/repo 미정

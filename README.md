@@ -1,6 +1,6 @@
 # @nestarc/idempotency
 
-> IETF draft-07-compatible idempotency module for NestJS — decorator-based, pluggable storage (memory/Redis/Postgres), response replay, fingerprint validation, processing leases, and observability hooks.
+> Idempotency module for NestJS with an explicitly documented draft-07-inspired profile — decorator-based, pluggable storage (memory/Redis/Postgres), response replay, fingerprint validation, processing leases, and observability hooks.
 
 [![CI](https://github.com/nestarc/idempotency/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nestarc/idempotency/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@nestarc/idempotency.svg)](https://www.npmjs.com/package/@nestarc/idempotency)
@@ -11,7 +11,7 @@
 
 ## Why
 
-Non-idempotent HTTP methods (`POST`, `PATCH`, `DELETE`) can be processed multiple times when:
+HTTP mutations (such as `POST` and `PATCH`) can be processed multiple times when:
 
 - A client times out and the user retries the request
 - An API gateway or load balancer auto-retries
@@ -20,7 +20,7 @@ Non-idempotent HTTP methods (`POST`, `PATCH`, `DELETE`) can be processed multipl
 
 The result is double charges, duplicate orders, and corrupt state. The IETF draft [`httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) describes a solution: clients send an `Idempotency-Key` header with a unique value, and the server makes retries safe by replaying the original response when the original request completed.
 
-`@nestarc/idempotency` is a clean-room NestJS implementation of that draft-compatible behavior, with a one-line decorator API and pluggable storage. It does not claim full exactly-once execution across your business database transaction; it protects the HTTP mutation boundary and uses token-CAS storage records to prevent stale writers from clobbering newer records.
+`@nestarc/idempotency` provides a NestJS decorator API and pluggable storage for the [supported profile](#ietf-draft-compatible-profile) below. It does not implement every draft requirement. It does not claim full exactly-once execution across your business database transaction; it protects the HTTP mutation boundary and uses token-CAS storage records to prevent stale writers from clobbering newer records.
 
 ## Install
 
@@ -77,38 +77,58 @@ Node/Nest version matrix is tracked in [S8](docs/1.0.0/work-items/S8-release-val
 
 ## Quick start
 
+This is a local replay demonstration. For real mutations, use the
+[payments, orders and webhook recipes](docs/adoption-recipes.md) with durable
+business IDs and authentication.
+
 ```ts
 // app.module.ts
-import { Module } from '@nestjs/common';
-import { IdempotencyModule, MemoryStorage } from '@nestarc/idempotency';
+import { Body, Controller, Module, Post, UseInterceptors } from '@nestjs/common';
+import {
+  Idempotent, IdempotencyInterceptor, IdempotencyModule, MemoryStorage,
+} from '@nestarc/idempotency';
+
+@Controller('payments')
+@UseInterceptors(IdempotencyInterceptor)
+class PaymentsController {
+  @Post()
+  @Idempotent()
+  createPayment(@Body() dto: { commandId: string; amount: number }) {
+    // Demo only: no money is moved. Validate DTOs in your application.
+    return { commandId: dto.commandId, amount: dto.amount, accepted: true };
+  }
+}
 
 @Module({
-  imports: [
-    IdempotencyModule.forRoot({
-      storage: new MemoryStorage(),
-      ttl: 86400, // 24 hours
-    }),
-  ],
+  imports: [IdempotencyModule.forRoot({ storage: new MemoryStorage(), ttl: 86400 })],
+  controllers: [PaymentsController],
 })
 export class AppModule {}
 ```
 
 ```ts
-// payments.controller.ts
-import { Body, Controller, Post, UseInterceptors } from '@nestjs/common';
-import { Idempotent, IdempotencyInterceptor } from '@nestarc/idempotency';
+// main.ts
+import 'reflect-metadata';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
 
-@Controller('payments')
-@UseInterceptors(IdempotencyInterceptor)
-export class PaymentsController {
-  @Post()
-  @Idempotent()
-  createPayment(@Body() dto: CreatePaymentDto) {
-    // Protect business side effects with a durable command ID as well.
-    return this.paymentService.process(dto);
-  }
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks(); // SIGTERM/SIGINT run Nest lifecycle hooks
+  await app.listen(3000);
 }
+void bootstrap();
 ```
+
+```sh
+# Send twice: the second response has Idempotency-Status: replayed.
+curl -i http://localhost:3000/payments -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: demo-command-1' -d '{"commandId":"demo-command-1","amount":100}'
+```
+
+The [executable examples](test/consumers/README.md) compile public imports from an
+installed tarball and exercise Nest init/close, first request and replay.
+Memory is local to one process and loses records on restart.
 
 A duplicate `POST /payments` with the same `Idempotency-Key` header and matching
 body replays a retained, supported completed response without re-running your
@@ -117,14 +137,19 @@ the [failure and recovery contract](docs/failure-recovery.md).
 
 ### Three ways to wire the interceptor
 
-The module deliberately does **not** auto-register the interceptor — you opt in with one of these patterns:
+The module deliberately does **not** auto-register the interceptor. The following
+are changes to the quickstart above; the controller/method examples are placement
+fragments. Complete compiled versions are in the [Memory examples](test/consumers/memory/examples.ts).
 
 ```ts
-// 1. App-global — applies to every controller
+// 1. App-global — replace the quickstart module and remove its @UseInterceptors.
+import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
-import { IdempotencyInterceptor } from '@nestarc/idempotency';
+import { IdempotencyInterceptor, IdempotencyModule, MemoryStorage } from '@nestarc/idempotency';
 
 @Module({
+  imports: [IdempotencyModule.forRoot({ storage: new MemoryStorage() })],
+  controllers: [PaymentsController], // the quickstart controller above
   providers: [{ provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor }],
 })
 export class AppModule {}
@@ -199,7 +224,7 @@ cleanup, even if business effects already committed. Subscription cancellation
 does not start completion or deletion for a later handler result; an already
 started storage Promise may still commit. See [failure recovery](docs/failure-recovery.md).
 
-### Upgrading stored keys and responses (S1/S3, unreleased)
+### Upgrading from 0.4 to 1.0 (unreleased)
 
 All scope modes now use versioned storage keys; old raw and `scope::key` records
 have no fallback lookup, automatic move or deletion. Response bodies
@@ -229,11 +254,13 @@ instances, then resume. Rollback requires the same protection for commands
 processed by the new version; old code cannot read the new keys or bodies.
 Do not use automatic dual reads, key rotation alone or bulk deletion as a migration.
 Old records generally cannot prove the tenant/user authorization required by
-the new scope. See [D03 and the D07 handoff](docs/1.0.0/decisions.md#d03--요청-격리와-키-입력-decided).
+the new scope. Follow the [executable migration and rollback guide](docs/migration-1.0.md) and
+[D07](docs/1.0.0/decisions.md#d07--10-전환과-롤백-decided).
 
 ## Redis storage
 
 ```ts
+import { Module } from '@nestjs/common';
 import { IdempotencyModule } from '@nestarc/idempotency';
 import { RedisStorage } from '@nestarc/idempotency/redis';
 import { Redis } from 'ioredis';
@@ -251,33 +278,55 @@ const client = new Redis({ host: 'localhost', port: 6379 });
 export class AppModule {}
 ```
 
-Or async via `ConfigService`:
+Here `client` belongs to the application. After `await app.close()`, its owner
+must call `await client.quit()` once, after all users have stopped. The adapter
+does not close an injected client. See [Redis lifecycle examples](test/consumers/redis/examples.ts).
+
+### Async registration and connection ownership
+
+For an adapter-owned connection, use `connection`. Nest calls the adapter's
+shutdown hook when closing the application:
 
 ```ts
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { Module } from '@nestjs/common';
 import { IdempotencyModule } from '@nestarc/idempotency';
 import { RedisStorage } from '@nestarc/idempotency/redis';
-import { Redis } from 'ioredis';
 
 @Module({
-  imports: [
-    IdempotencyModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        storage: new RedisStorage({
-          client: new Redis({
-            host: config.get('REDIS_HOST'),
-            port: config.get('REDIS_PORT'),
-          }),
-        }),
-        ttl: config.get('IDEMPOTENCY_TTL', 86400),
+  imports: [IdempotencyModule.forRootAsync({
+    useFactory: async () => ({
+      storage: new RedisStorage({
+        connection: {
+          host: process.env.REDIS_HOST ?? '127.0.0.1',
+          port: Number(process.env.REDIS_PORT ?? 6379),
+        },
       }),
+      ttl: 86400,
+      processingTtl: 60,
     }),
-  ],
+  })],
 })
 export class AppModule {}
 ```
+
+For dependency injection, list the supplying module in `imports` and its tokens
+in `inject`. `useClass` constructs an `IdempotencyOptionsFactory`; `useExisting`
+uses an exported factory from an imported module. Choose one async mechanism.
+The [compiled async examples](test/consumers/common/module-examples.ts) exercise all
+three mechanisms, including import visibility and init/close.
+
+| Construction | Connection owner and shutdown |
+| --- | --- |
+| `new MemoryStorage()` | Nest destroys its timers on `app.close()`. |
+| `new RedisStorage({ client })` | Application owner quits the shared client after all users close. |
+| `new RedisStorage({ connection })` | Adapter quits its own client on module destroy. |
+| `new PostgresStorage({ pool })` | Application owner ends the shared pool after all users close. |
+| `new PostgresStorage({ connection })` | Adapter ends its own pool on module destroy. |
+
+Register each storage instance once. Avoid separate adapters or pools for the
+interceptor and sweep service. If startup fails, the application still owns
+cleanup of resources it created. `app.close()` triggers lifecycle hooks;
+`enableShutdownHooks()` additionally connects process signals to that lifecycle.
 
 ## PostgreSQL storage
 
@@ -304,13 +353,17 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export class AppModule {}
 ```
 
+The injected `pool` remains usable after `await app.close()`; its application
+owner then calls `await pool.end()`. [Postgres lifecycle examples](test/consumers/postgres/examples.ts)
+verify both injected and adapter-owned pools against a real database.
+
 ### Schema migration
 
 Three options, pick whichever fits your tooling:
 
 1. **SQL file (recommended for production):**
    ```bash
-   psql "$DATABASE_URL" -f node_modules/@nestarc/idempotency/sql/init.sql
+   psql "$DATABASE_URL" -f "$(node -p "require.resolve('@nestarc/idempotency/sql/init.sql')")"
    ```
 2. **Code helper (good for tests / scripts):**
    ```ts
@@ -336,11 +389,15 @@ Lazy expiration on `get()` already guarantees correctness. The sweep
 service exists only to bound disk usage in long-running deployments:
 
 ```ts
+import { Module } from '@nestjs/common';
+import { Pool } from 'pg';
 import {
   IdempotencyModule,
   IDEMPOTENCY_SWEEP_OPTIONS,
 } from '@nestarc/idempotency';
 import { PostgresStorage, PostgresSweepService } from '@nestarc/idempotency/postgres';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 @Module({
   imports: [IdempotencyModule.forRoot({ storage: new PostgresStorage({ pool }) })],
@@ -355,15 +412,22 @@ import { PostgresStorage, PostgresSweepService } from '@nestarc/idempotency/post
 export class AppModule {}
 ```
 
-Or schedule it externally with `pg_cron`:
+`PostgresSweepService` injects `IDEMPOTENCY_STORAGE`, so it uses the exact
+`PostgresStorage` instance registered by `forRoot` or `forRootAsync`. Register
+this service only with PostgreSQL storage. Its timer stops on Nest close; the
+external pool still belongs to the application. [The executable sweep example](test/consumers/postgres/examples.ts)
+checks expiration cleanup, active-row retention and pool ownership.
+
+Or schedule it externally with `pg_cron` (an independently installed extension):
 
 ```sql
 SELECT cron.schedule('idempotency-sweep', '* * * * *',
   $$DELETE FROM idempotency_records WHERE expires_at < now()$$);
 ```
 
-> Multi-replica safe: each sweep wraps the DELETE in
-> `pg_try_advisory_lock` so only one replica per cycle does the work.
+> Each service sweep takes a session advisory lock on the same PostgreSQL database;
+> overlapping service sweeps skip while another holds it. This does not elect a
+> permanent leader or coordinate the independent `pg_cron` query.
 
 ## Configuration reference
 
@@ -469,7 +533,7 @@ it does not establish that the previous business operation failed:
 
 ```ts
 IdempotencyModule.forRoot({
-  storage: new RedisStorage({ client: redis }),
+  storage: new RedisStorage({ client }),
   ttl: 86400,        // replay completed responses for 24 hours
   processingTtl: 60, // lease expires after 60 seconds; reconcile uncertain work
 });
@@ -502,26 +566,15 @@ that retrying a business operation is safe.
 ### Custom key and fingerprint resolvers
 
 Use `keyResolver` when the stable key comes from a webhook event id or command
-id instead of the `Idempotency-Key` header:
+id instead of the `Idempotency-Key` header.
 
-```ts
-// This guard must verify the provider signature over the original raw body.
-@UseGuards(StripeSignatureGuard)
-@Post('webhooks/stripe')
-@Idempotent({
-  keyResolver: (ctx) => {
-    const req = ctx.switchToHttp().getRequest<{ body: { id: string } }>();
-    return req.body.id;
-  },
-  fingerprint: ({ body }) => {
-    const event = body as { type: string; data: { object: { id: string } } };
-    return `${event.type}:${event.data.object.id}`;
-  },
-})
-handleStripeWebhook(@Body() event: StripeEvent) {
-  return this.webhookService.process(event);
-}
-```
+The [webhook recipe](docs/adoption-recipes.md) verifies the original raw bytes
+in a guard, validates the event, then resolves its event ID. It also separates
+event deduplication from business deduplication and out-of-order delivery.
+Do not resolve an event ID from an unverified body or verify only in the handler:
+replay skips the handler. Keep all mutation-relevant fields in the default body
+fingerprint, or explicitly select and test the semantic fields your provider
+promises to keep stable.
 
 The boolean `fingerprint` behavior remains unchanged. A custom resolver replaces
 the default body hash and should return a deterministic semantic fingerprint.
@@ -531,12 +584,19 @@ the default body hash and should return a deterministic semantic fingerprint.
 The unreleased 1.0 event contract emits optional outcome events and status headers:
 
 ```ts
+import { IdempotencyModule, type IdempotencyOutcome } from '@nestarc/idempotency';
+import { PostgresStorage } from '@nestarc/idempotency/postgres';
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const counts = new Map<IdempotencyOutcome, number>();
+
 IdempotencyModule.forRoot({
   storage: new PostgresStorage({ pool }),
   observability: {
     onEvent: (event) => {
       // outcome has a fixed set of values. Do not use request hashes as labels.
-      metrics.increment(`idempotency.${event.outcome}`);
+      counts.set(event.outcome, (counts.get(event.outcome) ?? 0) + 1);
     },
   },
 });
@@ -590,7 +650,8 @@ additional event. A failed or ambiguous write may already have changed storage;
 an event is not proof of the final database state. Pending writes that settle
 after unsubscribe do not deliver an outcome event through the canceled chain.
 See [failure recovery](docs/failure-recovery.md) for cancellation, crash and
-reconciliation rules; broader adapter validation remains tracked in S6.
+reconciliation rules and [D06](docs/1.0.0/decisions.md#d06--저장소-공통-계약-decided)
+for the completed adapter contract.
 
 `onEvent` is best-effort and is not awaited. A synchronous throw or asynchronous
 rejection produces one fixed warning without another event, and cannot replace
@@ -614,7 +675,7 @@ headers are generated from the current outcome only.
 
 ### Response header replay
 
-v0.3 caches and replays a conservative set of response headers by default:
+The module caches and replays a conservative set of response headers by default:
 `Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers.
 Unsafe or hop-by-hop headers such as `Set-Cookie`, `Connection`, and
 `Transfer-Encoding` are never cached.
@@ -649,7 +710,7 @@ Client Request (with Idempotency-Key header)
     ├─ 1. Read metadata + Idempotency-Key header
     │     ├─ no @Idempotent → pass through
     │     ├─ missing header + required=true → 400 Bad Request
-    │     └─ resolve TTL (reject 0/negative/fractional/NaN/Infinity)
+    │     └─ resolve TTL (integer seconds 1 through 2,147,483,647)
     │
     ├─ 2. Apply scope to the key
     │     (versioned hash of identity + method + actual path + key; query excluded)
@@ -699,6 +760,30 @@ These checks protect storage ownership; they do not cancel business operations.
 
 When a racing winner has already finished with a supported payload and matching fingerprint, its response is replayed. The interceptor re-reads the record after a lost `create()` race and applies the same validation as on the initial read.
 
+### Client behavior after each outcome
+
+These rows describe errors emitted by this module; application validation and
+upstream gateways can use the same HTTP status for other reasons. Keep the
+command ID, identity, endpoint and intended payload stable on retries.
+
+| Outcome | Client / operator action |
+| --- | --- |
+| Missing key, required route (400) | Supply the previously allocated command ID. The interceptor did not run the handler. On `required: false`, missing keys bypass protection. |
+| Invalid key (400) | Fix the header/resolver contract (one nonblank key within the byte limit). Invalid keys never bypass, even on optional routes. Do not silently remap a command with an uncertain earlier attempt. |
+| Processing or unreplayable stored response (409) | Use bounded backoff for known in-flight work, keeping the same key/body. Persistent 409 or an unknown prior result requires business lookup/reconciliation. No automatic `Retry-After` or wait API is supplied. |
+| Fingerprint mismatch (422) | Compare the original command and payload. Restore the original payload for the same intent. Allocate a new command ID only for a deliberately new operation after resolving the old outcome; never rotate keys just to avoid 422. |
+| Handler error, including an inner timeout | Cleanup attempts token deletion and a later request may run again. A 5xx does not prove rollback. Query the command ledger/provider first; retry only under durable deduplication when safe. |
+| Storage get/create/race lookup error | Handler is not invoked by that attempt, but a failed create acknowledgment may leave a lease. Respect earlier uncertain attempts; fix storage and reconcile before retrying. |
+| Successful response with `complete_error` or `stale` | Preserve the successful result. The replay record may be PROCESSING, COMPLETED or gone. Do not submit a new command to repair caching. Status headers may be disabled, so clients cannot require them. |
+| TTL expired / record absent | The next request can execute again. Retained business/inbox IDs must still prevent duplicate effects; expiry is not evidence of failure. |
+| Network timeout, outer cancellation, crash or otherwise unknown result | Query an authenticated business-result endpoint and reconcile with the provider. Hold retries while a previous worker could commit or a provider result is unknown, even after TTL. |
+| Invalid TTL/scope/maxKeyLength or unsupported response configuration (default 500) | Operator fixes server configuration; changing the client key does not solve it. |
+
+A completed response is retained for `ttl` from completion; a PROCESSING lease
+lasts `processingTtl` from acquisition. Neither duration is a business transaction
+or the retention period of the command ledger. See [failure recovery](docs/failure-recovery.md)
+and [adoption recipes](docs/adoption-recipes.md) for reconciliation examples.
+
 ## Storage adapters
 
 | Feature          | `MemoryStorage`        | `RedisStorage`         | `PostgresStorage`                        |
@@ -706,9 +791,13 @@ When a racing winner has already finished with a supported payload and matching 
 | Scope            | single process         | shared across replicas | shared across replicas                   |
 | Persistence      | none (lost on restart) | depends on Redis configuration | depends on Postgres configuration |
 | TTL mechanism    | deadline checks + chunked timers | Redis `EXPIRE` | deadline checks + optional sweep service |
-| Cluster-safe     | ❌                     | ✅                     | ✅                                       |
-| Production-ready | ❌ (dev/test only)     | ✅                     | ✅                                       |
+| Cross-process coordination | none | atomic NX/token CAS on one shared keyspace | atomic NX/token CAS on one shared table |
+| Deployment use | dev/test only | configure retention, persistence and failover for your application | configure backups, replication and failover for your application |
 | Required peer    | none                   | `ioredis ^5`           | `pg ^8.11`                               |
+
+Persistence and failover durability depend on the deployed service configuration.
+Storage coordination does not atomically commit with your business database or
+external provider. Losing or expiring records can permit execution again.
 
 ### Custom storage adapters
 
@@ -724,68 +813,18 @@ strings, clamp values, or let an NX/CAS miss hide an invalid TTL. Implementation
 must support the whole range; native timers may need to split long deadlines
 into smaller waits. This contract validates TTLs, not every record field.
 
-```ts
-import type {
-  IdempotencyStorage,
-  IdempotencyRecord,
-  CreateResult,
-  CompleteResponse,
-  MutateResult,
-} from '@nestarc/idempotency';
-import type { OnModuleDestroy } from '@nestjs/common';
-
-class MyStorage implements IdempotencyStorage, OnModuleDestroy {
-  async get(key: string): Promise<IdempotencyRecord | null> {
-    // Return the record, or null if it doesn't exist / has expired.
-  }
-
-  async create(
-    key: string,
-    fingerprint: string | undefined,
-    ttlSeconds: number,
-  ): Promise<CreateResult> {
-    // First validate ttlSeconds (integer 1..2_147_483_647) or throw RangeError.
-    // NX semantics: if the key already exists, return { acquired: false }.
-    // Otherwise, generate an opaque token (e.g. randomUUID()), persist it
-    // alongside the PROCESSING record, and return { acquired: true, token }.
-    // `createdAt` must equal the moment of creation and be preserved
-    // verbatim across subsequent complete() calls.
-  }
-
-  async complete(
-    key: string,
-    token: string,
-    response: CompleteResponse,
-    ttlSeconds: number,
-  ): Promise<MutateResult> {
-    // First validate ttlSeconds, even if this call would otherwise be stale.
-    // Atomically require an unexpired PROCESSING record with this token.
-    // Return 'stale' without mutation for missing, expired, different-token
-    // or already-COMPLETED records. On first success, return 'ok', refresh
-    // `expiresAt` to now + ttlSeconds, and preserve original `createdAt`.
-  }
-
-  async delete(key: string, token: string): Promise<MutateResult> {
-    // Idempotent cleanup: return 'ok' if the record matched-and-was-removed
-    // OR was already absent/expired. Return 'stale' only if a live DIFFERENT record
-    // (with a different token) exists under this key — in that case, do
-    // NOT remove it.
-  }
-
-  // Optional but recommended: Nest will call this during app.close().
-  async onModuleDestroy(): Promise<void> {
-    // Release any external resources (DB connections, timers, ...).
-  }
-}
-```
-
-Then pass an instance to `IdempotencyModule.forRoot({ storage: new MyStorage() })`.
+Import `IdempotencyStorage`, `IdempotencyRecord`, `CreateResult`,
+`CompleteResponse` and `MutateResult` as types from `@nestarc/idempotency`.
+Implement `get/create/complete/delete` with the contract above, preserve the
+opaque response body exactly, then supply that instance as `storage` to
+`forRoot` or the async options factory. An optional `onModuleDestroy` hook must
+close only resources owned by the adapter.
 
 The package ships a **shared contract test suite** at `test/support/shared-storage-contract.ts` (in the source tree, not exported) that encodes every behavioral guarantee above. Custom adapters are encouraged to copy it into their own repo and plug in via `describeStorageContract('MyStorage', factory)` to catch LSP drift before it ships.
 
 ## IETF draft-compatible profile
 
-This package targets the behavior described by [`draft-ietf-httpapi-idempotency-key-header-07`](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/). The draft is not a final RFC, so the package documents its supported profile explicitly. The unreleased 1.0 profile covers:
+This profile is based on the fixed [draft-07 text](https://www.ietf.org/archive/id/draft-ietf-httpapi-idempotency-key-header-07.html), checked 2026-10-07. That document expired on 2026-04-18; it is not a final RFC or a claim of conformance to a later revision. The unreleased 1.0 profile covers:
 
 - ✅ `Idempotency-Key` header recognition (configurable name); raw opaque strings, not Structured Field parsing
 - ✅ Custom application key resolvers for webhook event ids and command ids
@@ -795,11 +834,18 @@ This package targets the behavior described by [`draft-ietf-httpapi-idempotency-
 - ✅ **409 Conflict** for in-flight requests and stored response formats that cannot be safely replayed
 - ✅ **422 Unprocessable Entity** for fingerprint mismatch — priority over PROCESSING state per draft semantics
 - ✅ Configurable completed replay TTL and optional processing TTL (integer seconds 1–2,147,483,647, including direct adapter validation)
-- ✅ **Per-endpoint key scoping by actual request path** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /actual/path::rawKey`, excluding the query string to avoid accidental key drift
+- ✅ **Per-endpoint key scoping by actual request path** — versioned hash of a tuple containing method, actual path and raw key, plus identity for custom scopes; query excluded
 - ✅ Binary response detection — Buffer, typed arrays, and Node/Web streams are bypassed rather than cached as JSON garbage
 - ✅ Safe response header replay for `Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers
 - ✅ Outcome observability via `onEvent` and `Idempotency-Status` headers
 - ✅ **Completion failure isolation** — a failing `complete()` preserves the handler's successful value and never triggers deletion; uncertain writes and retries after expiry require business reconciliation
+
+Differences from draft-07: header values are raw opaque strings, with no
+Structured Field parsing; quotes are literal. Handler exceptions are not cached.
+Errors use Nest exceptions, without automatic `application/problem+json`, a
+`Link` header or an application documentation URL. Applications publish their
+own key, expiry and retry policies. Streams, SSE and manual responses are outside
+the supported replay profile. A decorator does not make an operation exactly-once.
 
 Deferred to future versions:
 
@@ -820,8 +866,9 @@ Deferred to future versions:
 
 - v0.2 (shipped): PostgreSQL storage adapter (`pg`), opt-in sweep service, bundled SQL DDL
 - v0.3 (shipped): Stable JSON fingerprinting, safe response header replay, Fastify verification, real Redis smoke coverage, hardened release validation
-- v0.4 (in progress): Processing leases, custom key resolvers, custom fingerprint resolvers, observability events/status headers, draft-compatible documentation cleanup
-- v0.5 candidates: Transactional integration (`@TransactionalIdempotent`), business-error caching option, Swagger/OpenAPI integration, service-level idempotency helpers
+- v0.4 (shipped): Processing leases, custom key resolvers, custom fingerprint resolvers, observability events/status headers, draft-compatible documentation cleanup
+- v1.0 (unreleased): Response safety, identity isolation, optional-driver imports, storage/TTL and failure contracts, executable adoption and migration guidance. Final release matrix and gates remain [S8](docs/1.0.0/work-items/S8-release-validation.md).
+- Future candidates (not promised for 1.0): Transactional integration (`@TransactionalIdempotent`), business-error caching option, Swagger/OpenAPI integration, service-level idempotency helpers
 
 ## License
 

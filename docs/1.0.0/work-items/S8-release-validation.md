@@ -197,3 +197,21 @@ Node24.11.1/Nest11, Redis7.2.7/PG16.14에서 전체38 suites/908 pass/0 skip, li
 native Node overflow 회귀와 실제 Redis PTTL 검사는 mock/fake timer로 대체하지 않는다.
 두 서비스 URL을 제공하고 전체 JSON의 pending/skip=0을 확인한다. 일반 spec의 환경 누락 skip 경로는 아직 유지되므로 S8 gate에서 반드시 차단한다.
 긴 TTL의 실제 수십 년 경과·분산 시계 동기화를 검증한 것으로 표현하지 않는다. S7 전환 예제, 최종 지원 matrix와 동일 artifact 출시 연결은 S8 잔여 범위다.
+
+
+### S7 도입·전환 인수인계 (2026-10-07)
+
+S7 완료, [D07](../decisions.md#d07--10-전환과-롤백-decided) DECIDED. [실행 예제 목록](../../../test/consumers/README.md),
+[업무 recipe](../../adoption-recipes.md), [upgrade/rollback 안내](../../migration-1.0.md)를 출시 대상에 유지한다.
+`npm run test:adoption`은 TEST_DATABASE_URL/TEST_REDIS_URL 모두 필수이며 sweep/migration·HTTP recipe·실제 tarball 소비자를 실행한다.
+최종 Node24/Nest11 대표 환경에서 전체 **41 suites / 937 pass / 0 skip**, 소비자 **45 pass / 기대된 실패3 / 0 skip**.
+[상세 S7 기록](S7-adoption-docs.md#2026-10-07-s7-최종-구현과-검증)과 [보존 JSON](../evidence/S7-validation.json)을 따른다.
+
+sweep은 IDEMPOTENCY_STORAGE를 주입하며 같은 PG adapter/Pool을 사용한다. 수동 class-token DI는 alias 전환이 필요하다.
+README quickstart는 tarball 안의 코드와 fixture 동일성 검사 후 실행하므로 둘을 함께 갱신한다.
+소비자에 Nest testing11.1.18 및 Memory class-transformer0.5.1이 추가됐다. 실제 연결의 injected/owned shutdown을 모두 검사한다.
+S8 matrix를 바꿀 때 consumer Nest testing과 HTTP adapter 버전도 함께 고려한다.
+
+현재 CI/release가 전체 실DB·소비자 gate 및 동일 tarball 게시를 강제하지 않는 점은 CONTRIBUTING에 명시했다.
+S8에서 필수 gate와 실제 배포 artifact를 연결한다. 모델0.4 reader와 로컬 provider simulator를 실제 구 binary/외부 결제사/production rollout 검증으로
+표현하지 않는다. 두 방향 모두 빈 namespace와 durable 업무 history, writer fencing·불명 결과 조정이 필요하며 SQL schema migration은 추가되지 않았다.

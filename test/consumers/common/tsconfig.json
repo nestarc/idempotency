@@ -7,6 +7,8 @@
     "skipLibCheck": false,
     "noEmit": true,
     "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   }

@@ -16,14 +16,14 @@ README를 복사한 Nest 앱이 설치·부팅·정상 재시도·종료까지 �
 
 ## 작은 작업
 
-- [ ] **S7-1** README sweep 구성을 그대로 TestModule에 옮겨 DI 실패를 재현한다. fixture가 연결의 소유권과 close 동작을 확인하도록 한다.
-- [ ] **S7-2** provider alias, 주입 token 또는 공식 wiring 방법 중 기존 API 영향을 검토해 수정하고, 실제 PG에서 만료 row 정리까지 확인한다. 새 Pool을 불필요하게 만드는 예제로 해결하지 않는다.
-- [ ] **S7-3** 모든 공식 예제의 생성자·import·공개 타입·forRootAsync wiring을 S2와 맞추고 compile/init/close 검사 대상으로 만든다.
-- [ ] **S7-4** 결제/주문 recipe를 작성한다. client command ID, 동일 의도의 재시도, 의미 있는 payload 변경, tenant/user 격리와 serializer 순서를 연결한다. 422를 무조건 새 키 생성으로 회피하도록 안내하지 않는다.
-- [ ] **S7-5** webhook recipe를 작성한다. replay 전에 인증·서명 검증을 수행하는 구성을 사용하고, event ID 중복·업무 중복·순서 뒤바뀜을 구분한다. provider 재전송 기간과 inbox/업무 unique constraint의 보존기간을 설명한다.
-- [ ] **S7-6** 상태별 client 행동 표를 만든다. missing/invalid key, 409, 422, handler 오류, complete 오류, TTL 만료, 결과 불명 각각의 동작을 S3/S5 계약과 일치시킨다.
-- [ ] **S7-7** D07에 기존 key/fingerprint/schema/옵션 변경의 업그레이드·혼합 버전·롤백 조건을 기록하고 실행 가능한 전환 안내를 작성한다.
-- [ ] **S7-8** README의 보장 범위·지원 표·draft 프로파일·roadmap과 CONTRIBUTING의 실제 DB/배포 설명을 확정 구현에 맞춰 갱신한다. 과거 handover와 충돌하는 내용은 새 문서를 가리키게 정리한다.
+- [x] **S7-1** README sweep 구성을 그대로 TestModule에 옮겨 DI 실패를 재현한다. fixture가 연결의 소유권과 close 동작을 확인하도록 한다.
+- [x] **S7-2** provider alias, 주입 token 또는 공식 wiring 방법 중 기존 API 영향을 검토해 수정하고, 실제 PG에서 만료 row 정리까지 확인한다. 새 Pool을 불필요하게 만드는 예제로 해결하지 않는다.
+- [x] **S7-3** 모든 공식 예제의 생성자·import·공개 타입·forRootAsync wiring을 S2와 맞추고 compile/init/close 검사 대상으로 만든다.
+- [x] **S7-4** 결제/주문 recipe를 작성한다. client command ID, 동일 의도의 재시도, 의미 있는 payload 변경, tenant/user 격리와 serializer 순서를 연결한다. 422를 무조건 새 키 생성으로 회피하도록 안내하지 않는다.
+- [x] **S7-5** webhook recipe를 작성한다. replay 전에 인증·서명 검증을 수행하는 구성을 사용하고, event ID 중복·업무 중복·순서 뒤바뀜을 구분한다. provider 재전송 기간과 inbox/업무 unique constraint의 보존기간을 설명한다.
+- [x] **S7-6** 상태별 client 행동 표를 만든다. missing/invalid key, 409, 422, handler 오류, complete 오류, TTL 만료, 결과 불명 각각의 동작을 S3/S5 계약과 일치시킨다.
+- [x] **S7-7** D07에 기존 key/fingerprint/schema/옵션 변경의 업그레이드·혼합 버전·롤백 조건을 기록하고 실행 가능한 전환 안내를 작성한다.
+- [x] **S7-8** README의 보장 범위·지원 표·draft 프로파일·roadmap과 CONTRIBUTING의 실제 DB/배포 설명을 확정 구현에 맞춰 갱신한다. 과거 handover와 충돌하는 내용은 새 문서를 가리키게 정리한다.
 
 ## 운영과 전환에서 결정할 사항
 
@@ -35,12 +35,12 @@ README를 복사한 Nest 앱이 설치·부팅·정상 재시도·종료까지 �
 
 ## 완료 조건
 
-- [ ] 공식 quickstart·async 등록·Redis/PG·sweep·관측·tenant 예제가 공식 import 경로로 compile/init/close된다.
-- [ ] sweep 예제는 실제 PG의 만료 row 제거와 외부 Pool 소유권을 검증했다. mock 또는 skip만으로 완료 처리하지 않는다.
-- [ ] 결제/주문/webhook recipe가 S1의 지원 응답, S3의 인증 경계, S5의 오류 계약과 모순되지 않는다.
-- [ ] 400/409/422와 업무·저장소 오류 후 행동, 처리 lease와 replay TTL의 차이가 명시되어 있다.
-- [ ] D07에 key/fingerprint/schema/API별 변경 유무와 전환 조건, 미지원 롤백 조합이 기록되어 있다.
-- [ ] 문서에서 보장하지 않는 exactly-once, 무조건 durability, 지원하지 않는 스트림 replay를 약속하지 않는다.
+- [x] 공식 quickstart·async 등록·Redis/PG·sweep·관측·tenant 예제가 공식 import 경로로 compile/init/close된다.
+- [x] sweep 예제는 실제 PG의 만료 row 제거와 외부 Pool 소유권을 검증했다. mock 또는 skip만으로 완료 처리하지 않는다.
+- [x] 결제/주문/webhook recipe가 S1의 지원 응답, S3의 인증 경계, S5의 오류 계약과 모순되지 않는다.
+- [x] 400/409/422와 업무·저장소 오류 후 행동, 처리 lease와 replay TTL의 차이가 명시되어 있다.
+- [x] D07에 key/fingerprint/schema/API별 변경 유무와 전환 조건, 미지원 롤백 조합이 기록되어 있다.
+- [x] 문서에서 보장하지 않는 exactly-once, 무조건 durability, 지원하지 않는 스트림 replay를 약속하지 않는다.
 
 ## 관련 파일과 검증
 
@@ -48,7 +48,7 @@ README를 복사한 Nest 앱이 설치·부팅·정상 재시도·종료까지 �
 - [모듈](../../../src/idempotency.module.ts), [PostgresSweepService](../../../src/services/postgres-sweep.service.ts), [PostgresStorage](../../../src/storage/postgres.storage.ts).
 - [모듈 테스트](../../../test/idempotency.module.spec.ts), [sweep 테스트](../../../test/services/postgres-sweep.service.spec.ts), [PG lifecycle 테스트](../../../test/storage/postgres.storage.lifecycle.spec.ts).
 
-저장소 루트에서 실행한다. 실제 PG 검사에는 테스트 전용 TEST_DATABASE_URL을 설정한다. 신규 예제 fixture의 실행 명령은 구현 시 이 문서에 추가한다.
+저장소 루트에서 실행한다. 실제 PG 검사에는 테스트 전용 TEST_DATABASE_URL을 설정한다. 전체 예제 gate는 `npm run test:adoption`이다. TEST_DATABASE_URL과 TEST_REDIS_URL이 모두 필수이며 누락 시 실패한다. 아래의 개별 검사는 일부 범위만 실행한다.
 
 ```sh
 npm run test -- --runInBand test/idempotency.module.spec.ts test/services/postgres-sweep.service.spec.ts test/storage/postgres.storage.lifecycle.spec.ts
@@ -134,11 +134,11 @@ legacy/corrupt COMPLETED도409이며 새 body는 opaque string이다. 키/schema
 구/신 reader·writer 혼합 배포/롤백을 지원하지 않으며 traffic pause→drain→전체 교체가 필요하다.
 기존 키 삭제·자동 회전으로409를 피하도록 안내하지 않는다. S3의 향후 키 전환과 함께 D07을 마무리한다.
 
-- 마지막 갱신: 2026-10-07. S7 자체 구현·예제 검증 미착수. S1~S4의 README/CHANGELOG 계약 갱신은 위 인계 참조.
-- 다음 행동: README sweep 블록을 소비자 TestModule로 재현하고 필요한 provider와 실제 소유한 Pool이 같은지 확인한다.
-- 미결: D07. 선행 D01~D06은 확정됐다. 아래 S5/S6 인계를 전환 예제와 함께 통합한다.
-- 인계 대상: S8에 실행 예제 목록, 공식 import/지원 구성, 업그레이드·롤백 테스트와 남은 제한을 전달한다.
-- 검증 기록: 대상 commit/artifact, 환경, 명령, pass/fail/skip, 증거와 남은 제한을 실행 후 기록한다.
+- 마지막 갱신: 2026-10-07, Codex. S7-1~S7-8 및 완료 조건 충족. 기준 `8e22192725cc6aa16c703329eff4427a25ad763b` + S7 작업 트리.
+- 채택 결정: D07 DECIDED. D01~D06 확정 계약을 실행 예제·업무 recipe·전환 절차에 통합했다.
+- 다음 행동/인계 대상: S8에서 `npm run test:adoption`을 실제 DB 필수 gate와 동일 배포 tarball/최종 지원 matrix에 연결한다.
+- 미결: S7 없음. D08 지원 matrix·출시 artifact 정책은 S8 범위다.
+- 검증 기록: 아래 최종 증거 및 [S7-validation.json](../evidence/S7-validation.json)을 따른다. 위 S1~S4와 아래 S5/S6의 인계는 S7 착수 전 배경이다.
 
 ### S5 장애·복구 문서 인수인계 (2026-10-07)
 
@@ -182,3 +182,50 @@ adapter 계측/저장소 조사를 소비자 쪽에서 마련하며, 원장 조�
 Memory는 deadline 기반 분할 timer를 쓰며 옛 callback은 완료·교체된 레코드를 바꾸지 않는다. 공개 method/상태/key/schema 변경은 없다.
 README/CHANGELOG와 공개 타입 주석을 갱신했다. S7에서는 예제의 값, 0.4의 상한 초과 설정·잘못된 직접 호출 전환, custom adapter의 complete-once/만료 계약을 함께 설명한다.
 실제 Redis/PG 포함 전체908 pass/0 skip은 대표 환경 증거이며 S7 예제 또는 S8 최종 matrix 완료를 뜻하지 않는다.
+
+
+## 2026-10-07 S7 최종 구현과 검증
+
+### 완료한 변경
+
+- **S7-1/2**: README sweep 구성의 `PostgresStorage` 클래스 token DI 실패를 먼저 재현했다. 서비스에 `@Inject(IDEMPOTENCY_STORAGE)`를 적용해 모듈과 같은 adapter/Pool을 사용한다. root에 PG provider/import를 추가하지 않았다. direct constructor API는 유지하고 수동 class-token provider의 alias 전환은 D07에 기록했다. [회귀](../../../test/regression/postgres-sweep-wiring.spec.ts)는 sync/async compile/init/close, timer 종료, 실제 만료 row 제거·live row 보존, close 뒤 외부 Pool 사용을 검사한다.
+- **S7-3**: [소비자 예제 목록](../../../test/consumers/README.md#s7-실행-가능한-도입-예제)에 공식 import와 검증 범위를 정리했다. README quickstart를 동일 파일로 보존하고 tarball README와 비교한 뒤 emit/run한다. `forRoot`, `forRootAsync` useFactory/useClass/useExisting, interceptor 세 가지 등록, serializer·tenant/user·관측, Redis/PG 주입 연결 보존과 소유 연결 종료를 검증한다.
+- **S7-4/5**: [결제·주문·webhook recipe](../../adoption-recipes.md)와 실제 PG 업무 원장/로컬 provider simulator를 추가했다. Express/Fastify에서 명령·업무 unique, 변경 payload, 권한/serializer, 업무 commit 뒤 handler 오류, provider ack 유실·조정·unknown 보류, 서명 검증 후 replay, event ID·업무 중복·순서 구분 및 malformed DTO 무부작용을 확인했다. Stripe 공식 자동3일/Dashboard15일/CLI30일 재전송 정책은 2026-10-07 확인했으며 전역 TTL로 적용하지 않았다.
+- **S7-6**: [README client 행동 표](../../../README.md#client-behavior-after-each-outcome)에 missing/invalid400,409,422, handler/storage/complete 오류, TTL 만료·결과 불명·잘못된 설정500을 구분하고 command 원장/provider 조정 조건을 연결했다.
+- **S7-7**: [D07](../decisions.md#d07--10-전환과-롤백-decided) 확정, [전환 안내](../../migration-1.0.md)에 key/body/import/DI/입력/TTL/관측 변경과 기본 fingerprint·SQL schema 유지, 별도 빈 namespace와 공통 durable history, 전체 교체·rollback 및 미지원 혼합 조합을 기록했다. PG ledger의 old-format→new→rollback에서 명령당 업무 변경1회와 새 body를 구 reader가 읽지 못하는 경계를 검증했다. 실제 PG/Redis에서 문서의 빈 namespace 준비 코드와 이미 사용 중인 대상 거절도 실행했다.
+- **S7-8**: README 보장·지원 응답·draft 차이·0.4 shipped/1.0 unreleased 상태, CONTRIBUTING 실제 DB 검사와 현재 OIDC 배포 경로를 갱신했다. 과거 handover는 역사 기록임을 표시하고 새 문서로 안내한다. 현재 CI/release의 skip·tarball gate 부재를 완료된 것처럼 쓰지 않았다.
+
+### 재현 명령과 증거
+
+테스트 전용 `TEST_DATABASE_URL`, `TEST_REDIS_URL`을 설정한 저장소 루트에서 실행한다. 이번 환경은 Node24.11.1/npm11.6.2, Nest common/core/Express11.1.18·Fastify11.1.19, Redis7.2.7, PostgreSQL16.14다. root TS5.9.3, 소비자 strict TS5.7.3/node·node16·nodenext다.
+
+```sh
+npm run lint
+npx tsc --noEmit --incremental false -p tsconfig.json
+npm run test:adoption
+S5_REQUIRE_REAL_STORAGE=1 S7_REQUIRE_REAL_STORAGE=1 npm run test:all -- --runInBand
+```
+
+`test:adoption`은 필수 URL을 검사하고 sweep/migration→양 HTTP recipe→build/pack/격리 소비자 검사를 실행한다. URL 각각을 빠뜨린 두 경우 모두 exit1이며 skip으로 성공 처리하지 않는다. 이미 만든 출시 artifact를 검증할 때는 `npm run test:consumers -- --tarball /absolute/path/candidate.tgz`를 별도로 사용한다.
+
+| 검사 | 결과 | 증거 |
+| --- | --- | --- |
+| sweep 수정 전 README compile | 기대한 DI 오류2, 실제 PG2 skip (재현 단계) | `/private/tmp/s7-sweep-red.log` |
+| sweep 수정 후 관련 5 suites | 25 pass / 0 fail / 0 skip, 실제 PG 포함 | `/private/tmp/s7-sweep-green.log` |
+| 최종 lint / 개발 TypeScript | 모두 성공 | `/private/tmp/s7-lint-final.log`, `/private/tmp/s7-types-final.log` |
+| 최종 전체 회귀 | **41 suites / 937 pass / 0 fail / 0 skip**. 최종 recipe22개와 기존 S5 crash10개 포함 | `/private/tmp/s7-test-all-final.json`, [보존 JSON](../evidence/S7-validation.json) |
+| `npm run test:adoption` | 성공: sweep/migration7 + 당시 recipe20, build/pack와 소비자 전체. 이후 DTO 보완 recipe22개는 위 최종 전체 회귀에서 재검증 | `/private/tmp/s7-adoption.log` |
+| 실제 tarball 소비자 | **45 pass / 기대된 실패3 / 0 skip**. PG 타입 미설치3모드 실패 후 설치·재검증 성공 | `/private/tmp/idempotency-consumers-f0V6d8/summary.json` |
+| 문서 PG/Redis 전환 코드 | 빈 대상 성공2 + 이미 사용 중인 대상 거절2 | [runbook JSON](../evidence/S7-migration-runbook.json) |
+| 독립 코드/문서 검토 | 복사 예제 누락·배포 설명·raw Buffer 서명·DTO 입력 검증 보완 후 잔여 차단 문제 없음 | 최종 diff, 로컬 문서 링크73개 존재 확인 |
+
+검증 tarball은 `/private/tmp/idempotency-consumers-f0V6d8/nestarc-idempotency-0.4.0.tgz`, SHA-256은
+`2c2223507e8e984c5bd5d96c5f3f300633b60997f0f8ee242cec4a5fa2820588`이다. 버전은 아직0.4.0인 개발 artifact이며 1.0 게시를 뜻하지 않는다. DB URL의 자격증명은 증거에 저장하지 않았다. suite별 생성 table/schema/key와 연결은 fixture가 정리했고 전용 로컬 Redis/PG는 검증 후 정지했다.
+
+### S8 인수인계와 남은 검증 한계
+
+- 대표 Node24/Nest11 환경 증거다. 최종 Node/Nest/HTTP 지원 matrix, CI 필수 실DB gate, 테스트한 동일 artifact 게시와 D08은 S8이 확정한다.
+- upgrade/rollback은 실제 PG 업무 ledger와 **0.4 key/body 모델**을 사용한다. 설치된0.4 binary, production ingress fencing·배포 orchestrator·과거 command backfill을 검증한 것이 아니다. 각 서비스는 실제 두 artifact로 전환을 rehearsal해야 한다.
+- 결제/webhook은 **로컬 provider simulator**다. 실제 외부 provider 계약·retention worker·database failover·모든 crash 지점의 원자성을 보장하지 않는다. 기존 S5 실제 crash fixture와 구분한다.
+- sandbox의 최초 loopback/listen 시도는 EPERM이었다. 테스트 전용 서비스/HTTP/npm 설치에 escalation을 사용해 실제 검사와 최종 전체 검사를 성공시켰다. mock/skip으로 완료 처리하지 않았다.
+- 커밋·태그·npm publish·실제 서비스 데이터 전환은 실행하지 않았다. S7의 잔여 구현 항목은 없다.

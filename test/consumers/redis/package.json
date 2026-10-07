@@ -15,6 +15,7 @@
     "ioredis": "5.10.1"
   },
   "devDependencies": {
+    "@nestjs/testing": "11.1.18",
     "@types/node": "20.19.39",
     "typescript": "5.7.3"
   },

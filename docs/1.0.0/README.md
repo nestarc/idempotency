@@ -2,7 +2,7 @@
 
 이 문서는 `@nestarc/idempotency` 1.0.0 개발을 이어갈 때의 시작점이다. [조사 문서](../1.0.0-stabilization-research.md)는 발견 당시의 근거를 보존하고, 이 작업판과 작업별 문서는 구현 상태와 다음 행동을 관리한다.
 
-작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1~S6 완료, S7·S8은 미착수다.** 아직 릴리스하지 않았다. 최종 지원 버전 전체 검증과 출시 gate는 S8에 남아 있다.
+작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1~S7 완료, S8 미착수다.** 아직 릴리스하지 않았다. 최종 지원 버전 전체 검증과 출시 gate는 S8에 남아 있다.
 
 ## 문서 사용 순서
 
@@ -33,7 +33,7 @@
 | S4 | [관측 정보 보호](work-items/S4-observability.md) | DONE | Codex | S3의 namespace, S5의 실패 경로 | S5/D05 최종 오류·취소 경로 및 기존 payload/callback 회귀 통과, S4-4 완료 |
 | S5 | [장애와 요청 수명주기](work-items/S5-failure-lifecycle.md) | DONE | Codex | S1의 응답 완료 경계, S6의 만료/token 수명 계약 | D05/D06 수명 계약, 실제 crash10개 포함768 pass/0 skip, 운영 조정 가이드·S7/S8 인계 완료 |
 | S6 | [저장소 공통 계약](work-items/S6-storage-contract.md) | DONE | Codex | 없음 | D06 긴 TTL·직접 호출 선행 검증 완료. 실제 Redis/PG 포함908 pass/0 skip, S7/S8 인계 |
-| S7 | [도입 예제와 전환 문서](work-items/S7-adoption-docs.md) | TODO | 미배정 | S1~S6의 확정 계약 | Postgres sweep 예제를 그대로 Nest TestModule로 재현 |
+| S7 | [도입 예제와 전환 문서](work-items/S7-adoption-docs.md) | DONE | Codex | S1~S6의 확정 계약 | D07 확정, 전체937 pass/0 skip·소비자45 pass/기대 실패3, 실행 예제·전환 절차를 S8에 인계 |
 | S8 | [출시 검증](work-items/S8-release-validation.md) | TODO | 미배정 | S1~S7 완료 | 현재 CI와 release의 실제 DB skip 경로 확인 |
 
 선행 조건은 최종 완료를 위한 조건이다. S4의 노출 회귀 테스트, S7의 DI 수정·예제 작성, S8의 CI 준비는 먼저 할 수 있다. S1~S8은 기능 묶음이며 한 커밋의 크기를 강제하지 않는다. 각 문서의 `S번호-번호` 체크리스트를 작은 구현·검증 단위로 사용한다. 더 나눌 필요가 있으면 같은 ID 아래에 추가하고 부모의 완료 조건을 유지한다.
@@ -73,6 +73,13 @@ npm run test:all -- --runInBand
 | 2026-10-07 | `2fc43d7` + S4 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | prepublishOnly, 개발 타입 검사, 실제 tarball 소비자 | 681 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S4 기록](work-items/S4-observability.md), D04 및 S2/S5/S7/S8 인계; 당시 S5 최종 통합 미완료 |
 | 2026-10-07 | `e13b370` + S5 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | prepublishOnly, 개발 타입 검사, 실제 crash fixture, tarball 소비자 | 768 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S5 기록](work-items/S5-failure-lifecycle.md); S4 최종 통합, D06 수명 계약; S6-5/S8 잔여 |
 | 2026-10-07 | `2074060` + S6 작업 트리 | Node24.11.1 / Nest11.1.18 / Redis7.2.7 / PG16.14 | lint/type/build, 전체 테스트, 실제 tarball 소비자 | 908 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S6 기록](work-items/S6-storage-contract.md), D06 전체 완료; S7/S8 잔여 |
+| 2026-10-07 | `8e22192` + S7 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | lint/type, build·adoption gate, 최종 전체 회귀 | 937 pass / 0 skip; 소비자45 pass / 기대된 실패3 / 0 skip | [S7 기록](work-items/S7-adoption-docs.md), D07·예제·전환 인계; S8 잔여 |
+
+S7 최신 증거: sweep DI 수정, 공식 예제와 결제/주문/webhook recipe, D07 전환·rollback 안내 완료.
+실제 Redis7.2.7/PG16.14 포함 전체 **41 suites / 937 pass / 0 skip**, lint·타입·build 통과.
+실제 tarball 소비자 **45 pass / 기대된 실패3 / 0 skip**, 문서 namespace 코드4개 정상/거절 검증.
+[상세 기록](work-items/S7-adoption-docs.md#2026-10-07-s7-최종-구현과-검증)과 [보존 JSON](evidence/S7-validation.json)을 따른다.
+S8에 `npm run test:adoption`, 실제 artifact·최종 지원 matrix와 검증 한계를 인계했다.
 
 S6 최신 증거: D06 TTL 1~2,147,483,647초와 Memory 분할 timer, 직접 호출 선행 검증 완료.
 실제 Redis7.2.7/PG16.14 포함 전체 **38 suites / 908 pass / 0 skip**, lint·타입·build 통과.
@@ -146,3 +153,4 @@ Express adapter11.1.18/Fastify adapter11.1.19, class-transformer0.5.1.
 | 2026-10-07 | S4 자체 구현·검증: D04 namespace/안전 오류/고정 로그, sync storage 오류 관측, 상태 헤더 replay 차단, 전체·소비자 검증과 후속 인계. S5 최종 통합 전까지 IN_PROGRESS 유지. |
 | 2026-10-07 | S5 완료: handler/capture 경계 분리, 취소·불명 쓰기·실제 child crash10개, 전체768 pass, 소비자 검증·운영 조정 문서. S4 최종 완료, S6 core 통합 및 S6-5 잔여 기록. |
 | 2026-10-07 | S6 완료: D06 TTL 범위·직접 호출 검증, Memory deadline 분할 timer, 실제 Redis/PG 공통 계약·전체908 pass/0 skip 및 tarball 소비자 검증. S7/S8 인계. |
+| 2026-10-07 | S7 완료: sweep DI 재현·수정, 공개 예제 compile/init/close·업무 recipe·D07 전환/rollback, 전체937 pass/0 skip 및 실제 tarball 소비자45 pass/기대된 실패3. S8 인계. |

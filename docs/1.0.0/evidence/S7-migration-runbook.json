@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-07",
+  "node": "v24.11.1",
+  "source": "docs/migration-1.0.md",
+  "cases": [
+    {
+      "name": "Postgres fresh table passes",
+      "expected": 0,
+      "actual": 0,
+      "stdout": "Empty target table verified: s7_runbook_709bcb3ee76f",
+      "stderr": ""
+    },
+    {
+      "name": "Postgres existing target rejected",
+      "expected": 1,
+      "actual": 1,
+      "stdout": "",
+      "stderr": "PostgreSQL namespace verification failed"
+    },
+    {
+      "name": "Redis empty prefix passes",
+      "expected": 0,
+      "actual": 0,
+      "stdout": "Empty target prefix verified: s7_runbook_709bcb3ee76f:",
+      "stderr": ""
+    },
+    {
+      "name": "Redis occupied prefix rejected",
+      "expected": 1,
+      "actual": 1,
+      "stdout": "",
+      "stderr": "Redis namespace verification failed"
+    }
+  ]
+}

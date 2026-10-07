@@ -7,25 +7,44 @@ correctness very seriously. Please read this page before your first PR.
 
 - Node.js ≥ 20 (the `engines` field in `package.json`).
 - npm ≥ 9 (for `npm pkg get`, provenance, and workspaces support).
-- A real Redis is **not** required — unit tests use `ioredis-mock` and
-  e2e tests use `MemoryStorage`. If you want to run against a real Redis
-  locally, point `RedisStorage` at your instance manually.
+- PostgreSQL 16 and Redis 7 for real-adapter, adoption and failure-lifecycle
+  verification. Some unit tests use mocks/Memory, but they do not replace these
+  service checks. Use test-only databases: fixtures create/truncate/drop tables
+  and dedicated keys. Never point the tests at production.
 
 ## Local workflow
 
 ```bash
 npm ci                   # clean install from package-lock.json
-npm run lint             # eslint + prettier
+npm run lint             # eslint
 npm run test             # unit tests only
 npm run test:e2e         # in-process NestJS app e2e
 npm run test:all         # both
-npm run test:cov         # unit + coverage report (threshold 80%)
+npm run test:cov         # unit project coverage report (threshold 80%)
 npm run build            # tsc → dist/
-npm run prepublishOnly   # clean + lint + test:all + build (the full CI chain)
+npm run prepublishOnly   # clean + lint + test:all + build
 ```
 
-Every PR must pass the `prepublishOnly` chain before it merges; CI
-enforces this automatically.
+Before merging, run the checks above with both service URLs. Missing URLs can
+silently skip real-service suites in the default Jest command. To run the S7
+adoption gate (missing either URL is an error):
+
+```sh
+export TEST_DATABASE_URL=postgresql://test:test@localhost:5432/idempotency_test
+export TEST_REDIS_URL=redis://localhost:6379
+npm run test:adoption
+```
+
+`docker compose up -d postgres` starts the repository's PostgreSQL service;
+provide a separate test Redis. The adoption command covers wiring, recipes and
+migration, then builds and installs the actual tarball for public-import examples.
+See [S7](docs/1.0.0/work-items/S7-adoption-docs.md) for evidence and limitations.
+
+Current CI runs Node20/22 × Nest10/11, PostgreSQL tests and a separate Redis smoke
+job. It does not yet enforce the complete real-storage failure/adoption suite or
+actual-tarball consumer gate. Release validation and the final supported matrix
+remain [S8](docs/1.0.0/work-items/S8-release-validation.md); a green existing CI
+run alone is not evidence that those gates passed.
 
 ### Isolated package consumers
 
@@ -38,7 +57,7 @@ specific artifact. The runner preserves generated lockfiles, installed trees,
 logs and a checksum. See [consumer fixtures](test/consumers/README.md).
 
 `--skip-services` is available for partial local checks and records explicit
-skips; it is insufficient for S2/S8 completion. CI/release integration of this
+skips; it is insufficient for S2/S7/S8 completion. CI/release integration of this
 runner and the final supported version matrix are tracked in S8.
 
 ### Failure lifecycle experiments
@@ -110,17 +129,20 @@ Releases are driven by git tags that match `v*.*.*` and fire the
    - Publish to npm with `--provenance --access public`.
    - Create a GitHub Release with the CHANGELOG excerpt.
 
-### Required secrets
+### Publishing authentication and current limits
 
-The release workflow needs one repository secret:
+The workflow uses npm Trusted Publishing (OIDC), with GitHub environment `npm`
+and `id-token: write`; it does not read an `NPM_TOKEN` secret. Configure the npm
+trusted publisher for repository `nestarc/idempotency`, workflow `release.yml`,
+and environment `npm`. The publish job selects Node24. Review the actual
+[release workflow](.github/workflows/release.yml) before changing authentication.
 
-- `NPM_TOKEN` — an **Automation** token created at
-  https://www.npmjs.com/settings/nestarc/tokens/granular-access-tokens
-  with publish rights on `@nestarc/*`. Add it under
-  `Settings → Secrets and variables → Actions → New repository secret`.
-
-OIDC provenance does not require a secret — GitHub's runtime id token
-is used automatically via the `id-token: write` permission.
+The current release test job supplies PostgreSQL only, so Redis-dependent and
+combined failure/adoption checks are not enforced. The test job checks the
+source/build and runs `npm pack --dry-run`; it does not test an installed
+tarball. The publish job builds again from the checkout. S8 must
+close these gaps and record the tested artifact checksum before 1.0 publication.
+Do not treat a package dry run as a completed release validation.
 
 ### Manual / emergency publish
 

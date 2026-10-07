@@ -6,7 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Executable adoption examples for sync/async registration, connection ownership,
+  serialization, authenticated tenant scope, observability and PostgreSQL sweep.
+  Add payment/order/webhook recipes, a client action table and a tested
+  [0.4 → 1.0 upgrade/rollback runbook](docs/migration-1.0.md).
+
 ### Fixed
+
+- Inject the configured `IDEMPOTENCY_STORAGE` into `PostgresSweepService`, fixing
+  README sync/async module startup without a second adapter or pool. Direct
+  constructor calls are unchanged; manual Nest providers must use that token.
 
 - Keep Memory records with TTLs longer than Node's timer limit, including
   30-day windows. Deadline-based timer chunks recheck expiration and cannot
@@ -77,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opaque string, including empty responses. Legacy/corrupt records return 409
   without re-execution. Custom adapters must preserve payloads unchanged.
   Old/new readers and writers must not overlap during deployment or rollback;
-  follow the combined S1/S3 README upgrade procedure. This response-body change
+  follow the [D07 migration runbook](docs/migration-1.0.md). This response-body change
   itself does not alter keys; the S3 key transition above does. No schema change.
 - Added class-transformer 0.5.1 as a development dependency for Express/Fastify
   serialization regression tests. No new runtime dependency or public export.

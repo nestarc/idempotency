@@ -5,6 +5,7 @@ const { MemoryStorage } = require('@nestarc/idempotency');
 const { RedisStorage } = require('@nestarc/idempotency/redis');
 const Redis = require('ioredis');
 const { assertAbsent, assertPublicPaths, bootAndSmoke, run } = require('./common/runtime.cjs');
+const { runRedisExamples } = require('./compiled/examples');
 
 run(async () => {
   assertAbsent('pg', '@types/pg/package.json');
@@ -25,8 +26,10 @@ run(async () => {
   client.on('error', (error) => console.error(`Redis consumer: ${error.message}`));
   try {
     await client.connect();
-    const storage = new RedisStorage({ client, keyPrefix: `consumer-${randomUUID()}:` });
+    const keyPrefix = `consumer-${randomUUID()}:`;
+    const storage = new RedisStorage({ client, keyPrefix });
     await bootAndSmoke(storage, 'redis');
+    await runRedisExamples(client, keyPrefix, process.env.TEST_REDIS_URL);
   } finally {
     if (client.status === 'ready') await client.quit();
     else client.disconnect();

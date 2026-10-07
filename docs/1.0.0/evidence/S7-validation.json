@@ -1,0 +1,330 @@
+{
+  "date": "2026-10-07",
+  "workItem": "S7",
+  "target": {
+    "baseCommit": "8e22192725cc6aa16c703329eff4427a25ad763b",
+    "artifact": "S7 working tree; package remains unreleased 0.4.0"
+  },
+  "environment": {
+    "node": "24.11.1",
+    "npm": "11.6.2",
+    "platform": "darwin/arm64",
+    "nestjsCommonCoreExpress": "11.1.18",
+    "nestjsFastify": "11.1.19",
+    "rootTypeScript": "5.9.3",
+    "consumerTypeScript": "5.7.3",
+    "postgres": "16.14",
+    "redis": "7.2.7",
+    "pg": "8.20.0",
+    "ioredis": "5.10.1"
+  },
+  "checks": [
+    {
+      "command": "README sweep TestModule before fix",
+      "result": "expected regression",
+      "tests": {
+        "failed": 2,
+        "skippedRealStorage": 2
+      },
+      "reason": "Nest cannot resolve PostgresStorage class token; module exports IDEMPOTENCY_STORAGE",
+      "log": "/private/tmp/s7-sweep-red.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=<test PG> npm test -- --runInBand test/regression/postgres-sweep-wiring.spec.ts test/idempotency.module.spec.ts test/services/postgres-sweep.service.spec.ts test/storage/postgres.storage.lifecycle.spec.ts test/regression/optional-peer-boundary.spec.ts",
+      "result": "pass",
+      "tests": {
+        "passed": 25,
+        "skipped": 0
+      },
+      "log": "/private/tmp/s7-sweep-green.log"
+    },
+    {
+      "command": "npm run lint",
+      "result": "pass",
+      "log": "/private/tmp/s7-lint-final.log"
+    },
+    {
+      "command": "npx tsc --noEmit --incremental false -p tsconfig.json",
+      "result": "pass",
+      "log": "/private/tmp/s7-types-final.log"
+    },
+    {
+      "command": "TEST_REDIS_URL=<test Redis> TEST_DATABASE_URL=<test PG> S5_REQUIRE_REAL_STORAGE=1 S7_REQUIRE_REAL_STORAGE=1 npm run test:all -- --runInBand --json --outputFile=/private/tmp/s7-test-all-final.json",
+      "result": "pass",
+      "suites": 41,
+      "tests": {
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0
+      },
+      "log": "/private/tmp/s7-test-all-final.log",
+      "rawResult": "/private/tmp/s7-test-all-final.json",
+      "suitesSummary": [
+        {
+          "file": "test/regression/failure-lifecycle.real.spec.ts",
+          "passed": 10,
+          "status": "passed"
+        },
+        {
+          "file": "test/e2e/adoption-recipes.e2e-spec.ts",
+          "passed": 22,
+          "status": "passed"
+        },
+        {
+          "file": "test/storage/redis.storage.real.spec.ts",
+          "passed": 51,
+          "status": "passed"
+        },
+        {
+          "file": "test/e2e/request-isolation.e2e-spec.ts",
+          "passed": 58,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/adoption-migration.spec.ts",
+          "passed": 3,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/memory-long-ttl.spec.ts",
+          "passed": 14,
+          "status": "passed"
+        },
+        {
+          "file": "test/storage/postgres.storage.spec.ts",
+          "passed": 53,
+          "status": "passed"
+        },
+        {
+          "file": "test/e2e/postgres.e2e-spec.ts",
+          "passed": 3,
+          "status": "passed"
+        },
+        {
+          "file": "test/storage/redis.storage.spec.ts",
+          "passed": 61,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/response-replay-http.spec.ts",
+          "passed": 28,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/optional-peer-boundary.spec.ts",
+          "passed": 9,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/observability-headers-sweep.spec.ts",
+          "passed": 9,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/observability-safety.spec.ts",
+          "passed": 65,
+          "status": "passed"
+        },
+        {
+          "file": "test/e2e/idempotency.e2e-spec.ts",
+          "passed": 11,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/request-key-validation.spec.ts",
+          "passed": 165,
+          "status": "passed"
+        },
+        {
+          "file": "test/e2e/fastify.e2e-spec.ts",
+          "passed": 5,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/path-based-scope.spec.ts",
+          "passed": 2,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/postgres-sweep-wiring.spec.ts",
+          "passed": 4,
+          "status": "passed"
+        },
+        {
+          "file": "test/storage/redis.storage.lifecycle.spec.ts",
+          "passed": 3,
+          "status": "passed"
+        },
+        {
+          "file": "test/idempotency.interceptor.spec.ts",
+          "passed": 61,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/storage-lifecycle-contract.spec.ts",
+          "passed": 14,
+          "status": "passed"
+        },
+        {
+          "file": "test/storage/postgres.storage.lifecycle.spec.ts",
+          "passed": 2,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/failure-lifecycle.spec.ts",
+          "passed": 17,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/ttl-validation.spec.ts",
+          "passed": 30,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/request-isolation.spec.ts",
+          "passed": 27,
+          "status": "passed"
+        },
+        {
+          "file": "test/services/postgres-sweep.service.spec.ts",
+          "passed": 4,
+          "status": "passed"
+        },
+        {
+          "file": "test/storage/memory.storage.spec.ts",
+          "passed": 59,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/postgres-adapter.spec.ts",
+          "passed": 2,
+          "status": "passed"
+        },
+        {
+          "file": "test/idempotency.module.spec.ts",
+          "passed": 6,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/response-capture-failure.spec.ts",
+          "passed": 12,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/response-replay-boundary.spec.ts",
+          "passed": 9,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/response-completion.spec.ts",
+          "passed": 6,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/race-completed-winner.spec.ts",
+          "passed": 4,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/complete-failure-cascade.spec.ts",
+          "passed": 1,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/replay-body-format.spec.ts",
+          "passed": 50,
+          "status": "passed"
+        },
+        {
+          "file": "test/regression/storage-ttl-validation.spec.ts",
+          "passed": 5,
+          "status": "passed"
+        },
+        {
+          "file": "test/idempotency.decorator.spec.ts",
+          "passed": 4,
+          "status": "passed"
+        },
+        {
+          "file": "test/utils/stable-json.spec.ts",
+          "passed": 23,
+          "status": "passed"
+        },
+        {
+          "file": "test/utils/response-headers.spec.ts",
+          "passed": 14,
+          "status": "passed"
+        },
+        {
+          "file": "test/utils/request-scope.spec.ts",
+          "passed": 8,
+          "status": "passed"
+        },
+        {
+          "file": "test/utils/request-key.spec.ts",
+          "passed": 3,
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "command": "TEST_REDIS_URL=<test Redis> TEST_DATABASE_URL=<test PG> npm run test:adoption",
+      "result": "pass",
+      "coverage": "sweep/migration unit 7, recipe e2e 20 at gate time, build, tarball consumer examples; final DTO-strengthened recipes are 22 in final full suite above",
+      "log": "/private/tmp/s7-adoption.log"
+    },
+    {
+      "command": "npm run test:consumers (called by adoption gate, including npm run build and npm pack)",
+      "result": "pass",
+      "checks": {
+        "pass": 45,
+        "expected-failure": 3
+      },
+      "skipped": 0,
+      "tarball": "/private/tmp/idempotency-consumers-f0V6d8/nestarc-idempotency-0.4.0.tgz",
+      "sha256": "2c2223507e8e984c5bd5d96c5f3f300633b60997f0f8ee242cec4a5fa2820588",
+      "summary": "/private/tmp/idempotency-consumers-f0V6d8/summary.json",
+      "services": {
+        "explicitlySkipped": false,
+        "redisUrlProvided": true,
+        "databaseUrlProvided": true
+      },
+      "details": "README quickstart identical to emitted fixture; Memory/Redis/PG strict node/node16/nodenext; sync and all async registrations; serializer/auth/tenant/outcome; real sweep and injected/owned connection close"
+    },
+    {
+      "command": "Extract and execute PG/Redis shell blocks from docs/migration-1.0.md through public imports",
+      "result": "pass",
+      "cases": 4,
+      "evidence": "S7-migration-runbook.json"
+    },
+    {
+      "command": "Run test:adoption with each mandatory URL missing",
+      "result": "expected rejection",
+      "cases": 2,
+      "exitCode": 1,
+      "log": "/private/tmp/s7-adoption-missing-env.log"
+    },
+    {
+      "command": "Independent code/docs review and local link check",
+      "result": "pass",
+      "resolvedFindings": [
+        "README global snippet completeness",
+        "undefined Redis variable",
+        "release artifact description",
+        "lint comment",
+        "raw Buffer signature",
+        "fixed runbook errors",
+        "runtime DTO shape checks"
+      ],
+      "localLinkTargetsChecked": 73
+    }
+  ],
+  "limitations": [
+    "Representative Node24/Nest11 environment; S8 still owns the final Node/Nest/HTTP matrix and release gates.",
+    "Migration executes a modeled 0.4 address/body reader, not an installed old binary or production cutover.",
+    "Payment/webhook provider is a local simulator; real PostgreSQL verifies local business ledger constraints, not external provider recovery or failover durability.",
+    "Application retention workers, live ingress fencing and historical command backfill require application-owned validation.",
+    "Initial restricted loopback/listen attempts failed EPERM; real service/HTTP/consumer checks succeeded with sandbox escalation.",
+    "No npm publish, tags or production migration performed. Test-only services stopped after verification."
+  ]
+}

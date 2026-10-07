@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D06을 결정했다. D06은 긴 TTL·직접 입력 정책까지 포함하며, D07·D08은 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D07을 결정했다. D06은 긴 TTL·직접 입력 정책, D07은 업그레이드·롤백 절차를 포함하며 D08은 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -20,7 +20,7 @@
 | D04 | DECIDED | S4 | raw key와 독립된 namespace, encoded key의 SHA-256, 고정 오류 분류와 안전 로그 | event.scope 제거, 원본 Error 필드 제거; callback 격리 및 현재 오류 경로는 아래 D04, S5/S6 통합 재검증 필요 |
 | D05 | DECIDED | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
 | D06 | DECIDED | S6 | 만료·token·반복 complete, TTL 1~2,147,483,647초·직접 호출 선행 검증 | Memory/Redis/PG 동일 동작, custom adapter 검증·긴 TTL 지원, schema 변경 없음 |
-| D07 | OPEN | S7 | 기존 저장 레코드·키·schema를 사용하는 서비스의 전환과 복구 절차 | 이전 tenant/user 권한 검증, 중복 실행, 롤링 배포·롤백, webhook 보존기간과 업무 DB 확인 |
+| D07 | DECIDED | S7 | 별도 빈 저장 namespace와 양 버전 공통 durable 업무 중복 방지; 중단·조정·전체 교체와 대칭 rollback | 모든 key/opaque body 변경, fingerprint 알고리즘·SQL schema 유지, import/관측/TTL/DI 호환 변경; 혼합 writer 금지 |
 | D08 | OPEN | S8 | 지원 Node/Nest/HTTP adapter 조합과 artifact 검증·게시 경로 | Node 20 유지 여부, 22/24 검증, 실DB skip 차단, 동일 artifact 검증, RC 증거 |
 
 ## 먼저 지켜야 할 경계
@@ -95,7 +95,7 @@ D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 �
 - 전환: 모든 scope의 저장 키가 변경된다. legacy 형태로 fallback 조회·이동·삭제하지 않는다. 단, 옛 global raw key/자유로운 resolver 값은 새 v1 key 문자열과 같을 수 있으므로 버전 prefix 자체가 구/신 저장 공간의 분리를 보장하지 않는다. 이미 S1 형식의 body가 있는 그런 레코드는 현 reader가 출처를 구별하지 못하고 재생할 수 있다. 따라서 전환 시에는 **기존 레코드가 없는 별도 물리 저장 namespace**(새 MemoryStorage, 검증된 빈 Redis keyPrefix, 새 Postgres tableName 또는 별도 저장소)를 반드시 사용하고, 구/신 키의 동일 저장 공간 공존은 지원하지 않는다. 옛 레코드에는 권한 범위를 입증할 identity 정보가 없으며 custom 문자열을 역분해해도 복구할 수 없다. 구/신 키가 함께 있으면 같은 업무가 다시 실행될 수 있다. **traffic pause와 drain만으로 이 중복 위험을 해결하지 못한다.** 전 노드 전환 전에 업무 DB/inbox의 durable unique command ID 또는 외부 업무 결과 조정으로 과거 재시도를 차단해야 한다. 그 보장이 없으면 과거 key를 가진 재시도를 upstream에서 계속 차단하고 모든 재전송 가능 기간·처리 불명 업무를 해소할 때까지 전환하지 않는다. TTL 만료만으로 안전하다고 간주하지 않는다.
 - 혼합 배포/롤백: old/new writer가 같은 업무를 받을 수 있는 롤링 배포는 미지원이다. 트래픽 중단→in-flight 업무 결과 확인→과거/새 key의 업무 중복 방지 확인→기존 데이터와 겹치지 않는 빈 저장 namespace 확인→전체 교체 후 재개한다. rollback도 동일하게 새 버전에서 처리한 업무를 구버전이 재실행하지 못하게 해야 한다. 무조건 dual-read, prefix 회전만 수행, 일괄 삭제는 전환 절차가 아니다. namespace 분리는 과거 응답 혼입을 막고, 별도 업무 중복 방지는 재실행을 막는 각각의 전제다. D01의 replay body 전환 조건도 함께 적용한다.
 - 회귀: 수정 전 tenant-only endpoint 충돌과 `::` 경계 충돌이 모두 실패함을 확인했다. tenant/user/method/path/key 단일 변경, 정상 retry, query/slash/parameter, header/resolver invalid, Express/Fastify guard, legacy/new 공존을 검증한다. 최종 실행 결과는 [S3 작업 기록](work-items/S3-request-isolation.md)에 기록한다.
-- 후속: S2 공개 scope 타입의 배열 반환 소비자 검사, S4 namespace/event/log, S7 raw header 프로파일·인증 예제, D07의 업무 중복 방지 조건과 전환 시나리오. D07 전체는 S5/S6 계약까지 반영한 뒤 확정한다.
+- 후속: S2 공개 scope 타입의 배열 반환 소비자 검사, S4 namespace/event/log, S7 raw header 프로파일·인증 예제. 초기 인계에서 미결이던 D07은 아래 기록에 S5/S6 계약과 실행 전환 절차를 통합해 확정했다.
 
 
 ## D04 — 관측 정보 보호 (DECIDED)
@@ -125,15 +125,26 @@ D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 �
 - 회귀와 검증: `test/regression/observability-safety.spec.ts`, `observability-headers-sweep.spec.ts`에서 가짜 비밀 값을 key·body·identity·path·storage/callback/logger/sweep 오류에 넣어 전체 event와 Logger 인자를 검사한다. 각 storage 단계 동기 throw/rejection의 event 횟수, handler 결과, 레코드 보존을 대조하고 callback 실패·헤더 enable/disable·명시 allowlist·과거 저장 헤더를 확인한다. 실제 명령/결과/skip은 [S4 검증 기록](work-items/S4-observability.md)에 기록하며 이 결정만으로 검증 완료를 주장하지 않는다.
 - 후속(초기 S4 인계): 당시 S5/D05·S6/D06은 미결이었다. 2026-10-07 S5에서 D05와 D06 수명 계약을 통합하고 기존 관측 및 취소/capture/불명 쓰기 회귀를 재실행했다. 최종 결과는 S5 기록을 따른다. S7은 운영 예제/0.4 전환, S8은 동일 tarball 및 최종 지원 matrix 검증으로 인수한다.
 
-## D07 — S3에서 넘긴 전환 전제 (OPEN)
+## D07 — 1.0 전환과 롤백 (DECIDED)
 
-2026-10-07 S3가 확정한 key/scope 전환은 [D03](#d03--요청-격리와-키-입력-decided)과
-[S7 인수인계 표](work-items/S7-adoption-docs.md#s3--d07-전환-인수인계-2026-10-07)를 따른다.
-legacy alias 재조회는 없지만 raw key와 새 address의 정확한 중첩은 가능하다. 기존 데이터와
-writer가 없는 빈 물리 namespace 및 업무 DB/inbox dedup 또는 과거 결과 조정이 모두 필요하다.
-구/신 writer 혼합은 지원하지 않으며 rollback도 새 버전이 처리한 업무를 중복 실행하지 못해야 한다.
-S3 회귀에서 alias-only 재실행, 정확한 address 중첩의0.4 body409, 별도 namespace 격리를 확인한다.
-D07 전체는 S5/S6의 실패·만료 계약과 S7 실행 전환 절차가 완성될 때 확정한다.
+- 날짜/결정자: 2026-10-07, Codex. 사용자 S7 진행 요청, 기준 `8e22192725cc6aa16c703329eff4427a25ad763b`와 S7 작업 트리. D01~D06, S3/S5/S6 인계 및 실제 `sql/init.sql`·adapter·interceptor를 통합했다. 아래 결정은 초기 S3 전환 전제를 구체화하며 그 별도 namespace·업무 중복 방지 요구를 유지한다.
+- 계약: **기존 데이터·writer가 없는 별도 빈 물리 저장 namespace와 양 버전 공통 durable 업무 중복 방지는 각각 필수**다. 새 MemoryStorage, 검증된 빈 Redis prefix/별도 DB, 새 PG tableName/별도 DB를 사용한다. 과거 성공·미확정 명령과 향후 새 버전 명령을 tenant/업무 owner + command ID/inbox unique constraint 및 결과 조정으로 보호한다. 외부 provider 호출은 로컬 unique constraint만으로 원자적이지 않으므로 provider dedup·결과 조회도 설계해야 한다.
+- 순서: ingress/재전송 중단→모든 구 writer 차단→in-flight 및 이미 시작한 저장 쓰기 종료 확인→업무 원장/provider 결과 조정→구/신/rollback artifact의 동일 durable history·parameter 검사 확인→빈 namespace 확인→전체 교체·정상 요청/replay/과거 command 확인→재개. timeout·취소·lease 만료·저장소 null만으로 drain이나 업무 실패를 판정하지 않는다. 과거 command를 보호할 수 없으면 재전송을 upstream에서 차단하고 실제 재전송 가능 기간과 불명 업무를 해소할 때까지 전환을 보류한다.
+
+| 계약 | 변경 유무와 전환 영향 |
+| --- | --- |
+| key/scope | 모든 scope가 S3 JSON tuple SHA-256 v1 address로 변경. custom identity는 endpoint에 추가하고 slash/percent encoding 경계를 보존. legacy alias fallback 없음. old global raw key와 새 address는 정확히 같을 수 있고 S1-compatible body는 재생될 수 있으므로 prefix 자체는 출처 증명이 아님 |
+| fingerprint | 기본 stable JSON + SHA-256 알고리즘과 boolean 옵션은 유지. custom resolver의 `key`는 raw key, `scope`는 새 encoded storage key여서 이를 사용하는 resolver 결과는 바뀔 수 있음. event.namespace와 구분; 저장 fingerprint 일괄 변환 없음 |
+| body | D01 opaque replay:v1 string으로 변경. old reader와 호환되지 않음. legacy/corrupt COMPLETED는409(불일치422 우선), 자동 삭제·이동·형식 변환 없음. serializer 바깥에서 최종 plain JSON 저장 |
+| schema/storage API | 1.0 SQL schema·상태·메서드 시그니처 변경 없음. 기존 TEXT body/JSONB headers 유지. 0.2→0.3 response_headers 추가는 역사적 migration이며 새1.0 migration을 만들지 않음. custom adapter는 opaque body, 만료, atomic complete-once, TTL 검증 순서를 적용해야 함 |
+| 공개 import/DI | DB root export를 /redis·/postgres로 이동; PG 소비자가 pg/@types/pg 설치. sweep은 IDEMPOTENCY_STORAGE를 주입해 모듈과 같은 adapter 사용. 수동 class-token-only provider는 이 token alias 필요; 직접 생성자 인자는 유지 |
+| 입력/옵션/TTL | raw string header·UTF-8 byte 제한·invalid optional 입력400, 잘못된 설정500. ttl/processingTtl 기본값 유지, 정수1~2,147,483,647초. 상한 초과와 잘못된 직접 adapter TTL은 조회/변경 전 RangeError. 긴 Memory TTL 분할 timer; webhook 전역30일 변경 없음 |
+| 관측/실패 | event.scope→namespace, 원본Error→고정code/operation, keyHash 연속성 없음. hash를 metric label로 사용하지 않음. capture 실패는 성공값+bypass/lease 보존, complete 오류는 성공값을 전달하고 삭제하지 않음; ack 실패면 이미 COMPLETED일 수 있어 업무 결과 조정 필요. handler 오류 삭제는 업무 rollback 증명이 아님 |
+
+- 혼합·롤백: 같은 업무를 받는 old/new writer 동시 배포는 서로 다른 namespace여도 미지원이다. rollback도 트래픽을 멈추고 신 writer를 차단·조정한 뒤 별도 빈 old-format namespace와 준비된 구 artifact로 전환한다. 새 버전에서 처리한 command까지 같은 durable history/parameter 검사를 유지해야 한다. 이 조건 없는 원본0.4 artifact rollback, 신 형식 저장소를 구 reader에 연결, dual-read/legacy body 재포장, cache flush·prefix 회전·TTL 대기만으로 전환은 미지원이다. 기존 namespace는 조사·보존 정책에 따라 보관하고 오류 회피용 일괄 삭제는 하지 않는다.
+- 대안과 이유: 옛 key 문자열 역분해·body marker는 권한/직렬화 안전성의 근거가 아니므로 호환 읽기·copy 변환을 채택하지 않는다. namespace만 바꾸면 혼입은 막아도 handler 재실행은 막지 못하고, 업무 ledger만 유지하면 legacy response 혼입을 막지 못한다. 중단 없는 혼합 배포 API를 추가하는 대신 서비스가 검증할 수 있는 전체 교체 절차를 채택한다.
+- 실행 안내와 검증: [1.0 전환 안내](../migration-1.0.md)에 PG table 생성·Redis prefix 빈 상태 검사, 공개 API 수정, cutover/rollback/금지 조합과 필수 실PG 명령을 제공한다. [adoption-migration 회귀](../../test/regression/adoption-migration.spec.ts)는 exact old-global/S1-body 중첩과 새 namespace 분리, 실제 PG의 old-format→new interceptor→old-format rollback에서 durable ledger로 명령당 업무 변경1회를 검증한다. old0.4 binary 자체를 실행하는 테스트가 아니라 key/body 경계 모델이며 외부 provider 원자성을 검증하지 않는다. S3/S1 기존 회귀 및 S5 crash 증거를 함께 사용하고 실제 명령/결과는 S7 기록에 남긴다.
+- 후속: S8은 실제 배포 artifact와 checksum, 최종 Node/Nest/adapter matrix, 설치 소비자 검증을 확정한다. 사용자 서비스의 과거 command backfill·provider 조정·ingress fencing·production rollback 검증은 각 서비스가 수행하며 이 저장소 테스트의 보장으로 대체하지 않는다.
 
 
 ## D05 — 장애와 구독 수명 (DECIDED)

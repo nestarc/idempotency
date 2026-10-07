@@ -1,4 +1,4 @@
 {
   "extends": "./common/tsconfig.json",
-  "include": ["consumer.ts", "common/public-api.ts"]
+  "include": ["*.ts", "common/*.ts"]
 }
