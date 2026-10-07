@@ -1,0 +1,807 @@
+{
+  "date": "2026-10-07",
+  "workItem": "S8",
+  "status": "complete-local-validation",
+  "releasePublished": false,
+  "target": {
+    "baseCommit": "34e54f2891c00d823331347f23ef1dcbf4257d7c",
+    "validationCommit": "6f9a35925d3a10eda076450f030c46494357a66a",
+    "validationCommitLocation": "/private/tmp/idempotency-s8-run/snapshot",
+    "validationCommitKind": "local isolated clean clone snapshot; no commit/tag/push made in user repository",
+    "sourceSnapshotSha256": "ba2c2f223c7bb701cddba22e15fd79bcead598ed6ed1ab0fec132be4de1a34c8",
+    "sourceTree": "41ddbbbfae1cc3a09c9fadfeeb12196451b369dd",
+    "implementationPatch": "/private/tmp/idempotency-s8-run/implementation.patch",
+    "postValidationRecords": [
+      "docs/1.0.0/work-items/S8-release-validation.md",
+      "docs/1.0.0/README.md",
+      "docs/1.0.0/evidence/S8-validation.json"
+    ]
+  },
+  "artifact": {
+    "schemaVersion": 1,
+    "result": "pass",
+    "createdAt": "2026-10-07T12:16:14.175Z",
+    "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+    "node": "v24.11.1",
+    "npm": "11.6.2",
+    "source": {
+      "clean": true,
+      "snapshotSha256": "ba2c2f223c7bb701cddba22e15fd79bcead598ed6ed1ab0fec132be4de1a34c8",
+      "workingTree": "",
+      "packageLockSha256": "a7f3f87176382fbcdbab95d1fc497c8e6d792022ae9ad0312fbb606132f953a8"
+    },
+    "version": "0.4.0",
+    "tarball": "nestarc-idempotency-0.4.0.tgz",
+    "sha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+    "fileCount": 104,
+    "path": "/private/tmp/idempotency-s8-run/candidate/nestarc-idempotency-0.4.0.tgz",
+    "manifest": "/private/tmp/idempotency-s8-run/candidate/artifact.json",
+    "promotedPath": "/private/tmp/idempotency-s8-run/promoted/nestarc-idempotency-0.4.0.tgz"
+  },
+  "environment": {
+    "purpose": "S8 isolated release validation",
+    "platform": "darwin-arm64",
+    "postgres": {
+      "version": "16.14",
+      "binaryPlatform": "x86_64-apple-darwin24.6.0",
+      "binaryDirectory": "/private/tmp/idempotency-s2-services/pg-package/package/native/bin",
+      "dataDirectory": "/private/tmp/idempotency-s8-services/postgres-data",
+      "listenAddress": "127.0.0.1",
+      "port": 55438,
+      "database": "idempotency_s8",
+      "isolation": "fresh initdb; test user; localhost only"
+    },
+    "redis": {
+      "version": "7.2.7",
+      "binaryDirectory": "/private/tmp/idempotency-s2-services/redis-7.2.7/src",
+      "listenAddress": "127.0.0.1",
+      "port": 56388,
+      "persistence": "disabled for isolated test instance",
+      "ping": "PONG"
+    },
+    "node22": {
+      "version": "22.23.3",
+      "npmVersion": "10.9.9",
+      "binaryDirectory": "/private/tmp/idempotency-s8-tools/node-v22.23.3-darwin-arm64/bin",
+      "source": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-darwin-arm64.tar.gz",
+      "sha256": "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
+      "sha256Verified": true
+    },
+    "node24": {
+      "version": "24.11.1",
+      "npmVersion": "11.6.2",
+      "binaryDirectory": "/usr/local/bin"
+    },
+    "environmentFile": "/private/tmp/idempotency-s8-services/environment.sh",
+    "cleanupCommand": "sh /private/tmp/idempotency-s8-services/stop.sh",
+    "repositoryFilesChanged": false
+  },
+  "commands": {
+    "setup": "Fresh npm ci in four independent Node/Nest clones; install representative then minimum profiles with scripts/release-matrix.mjs; separate PostgreSQL databases and Redis database indexes",
+    "build": "node scripts/release-validation.mjs build --output ../candidate",
+    "install": "node scripts/release-matrix.mjs install --nest <10|11> --peer-profile <representative|minimum>",
+    "validate": "node scripts/release-validation.mjs validate --artifact ../candidate/artifact.json --output ../evidence/node<N>-nest<M>-<profile> --nest <M> --peer-profile <profile>",
+    "aggregate": "node scripts/release-validation.mjs verify-matrix --artifact ../candidate/artifact.json --evidence ../evidence"
+  },
+  "build": {
+    "result": "pass",
+    "checks": [
+      "fresh npm ci",
+      "clean",
+      "lint",
+      "full TypeScript",
+      "45 release gate tests",
+      "build",
+      "one npm pack --json --ignore-scripts",
+      "artifact identity and source snapshot verification"
+    ],
+    "log": "/private/tmp/idempotency-s8-run/build.log",
+    "gateTestLog": "/private/tmp/idempotency-s8-run/candidate/04-release-gate-tests.log"
+  },
+  "matrix": [
+    {
+      "cell": {
+        "node": "22",
+        "nest": "10",
+        "peerProfile": "minimum"
+      },
+      "node": "v22.23.3",
+      "npm": "10.9.9",
+      "installedVersions": {
+        "@nestjs/common": "10.4.22",
+        "@nestjs/core": "10.4.22",
+        "@nestjs/testing": "10.4.22",
+        "@nestjs/platform-express": "10.4.22",
+        "@nestjs/platform-fastify": "10.4.22",
+        "ioredis": "5.0.0",
+        "pg": "8.11.0",
+        "@types/pg": "8.11.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node22-nest10-minimum/validation.json",
+      "reportSha256": "4a1b00fa5b25f89ebc28dba6f40913ace97faf81c3e2ddfe91272c72529718c3",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "b9a3d33a833354f4f9d1aea458570876995d8b317dfe96c17b077004f09d26cf"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "4ff1445d34d43a2fbcf14bc2e6124f6c625898e6234037973b380f842d7addb9"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "79714c8bef258e96c840da0d17ebbc9c33bc0cd44fb2c086371e38c84356ef59"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "22",
+        "nest": "10",
+        "peerProfile": "representative"
+      },
+      "node": "v22.23.3",
+      "npm": "10.9.9",
+      "installedVersions": {
+        "@nestjs/common": "10.4.22",
+        "@nestjs/core": "10.4.22",
+        "@nestjs/testing": "10.4.22",
+        "@nestjs/platform-express": "10.4.22",
+        "@nestjs/platform-fastify": "10.4.22",
+        "ioredis": "5.10.1",
+        "pg": "8.20.0",
+        "@types/pg": "8.20.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node22-nest10-representative/validation.json",
+      "reportSha256": "ad76f6fb941b0d93d73b49fcb6c58840e006fe1506e9bd4d970be7caeddc05ad",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "cc23ca6b7b5e5fc15cbf010688d05ca0eda8b6acb491803d74babb847a6c9416"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "3c7a433cee80874ec84afbf5f5285a66a49630aca5e0f4ca123dcc9eca25415a"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "dd1f5e965d5f6b31d2b71f0a1da3718aa46c053377644364f9069a5809efa035"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "22",
+        "nest": "11",
+        "peerProfile": "minimum"
+      },
+      "node": "v22.23.3",
+      "npm": "10.9.9",
+      "installedVersions": {
+        "@nestjs/common": "11.1.18",
+        "@nestjs/core": "11.1.18",
+        "@nestjs/testing": "11.1.18",
+        "@nestjs/platform-express": "11.1.18",
+        "@nestjs/platform-fastify": "11.1.18",
+        "ioredis": "5.0.0",
+        "pg": "8.11.0",
+        "@types/pg": "8.11.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node22-nest11-minimum/validation.json",
+      "reportSha256": "6dc6f42fea53f84fa9a00eb60db4ec3d521dcb4107a27fc69869012aa38add5c",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "9ca917dfe9208a3e52461dd804e6583780c1329697c7d5425f6ac31ba02804a4"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "b3e731df13613eb26ab20856d00baddec2f1dd30e658c76013ba03b78ac8edad"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "fce31b26ef0f16fda1825034bbb9ad5103b25230dd820b9e5cd1a9822159daa9"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "22",
+        "nest": "11",
+        "peerProfile": "representative"
+      },
+      "node": "v22.23.3",
+      "npm": "10.9.9",
+      "installedVersions": {
+        "@nestjs/common": "11.1.18",
+        "@nestjs/core": "11.1.18",
+        "@nestjs/testing": "11.1.18",
+        "@nestjs/platform-express": "11.1.18",
+        "@nestjs/platform-fastify": "11.1.18",
+        "ioredis": "5.10.1",
+        "pg": "8.20.0",
+        "@types/pg": "8.20.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node22-nest11-representative/validation.json",
+      "reportSha256": "595b14c9180a04a8f3a08237c591d673bf7ff207edf89faff48bfff1ecf950c4",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "946e3addeb3d79ca34781a43eb12f281d9b4abb9a359fa37d70618b81871fe66"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "f72a6f7443eb69b4a3b487d937ab72bff6a38e0083ffa35af25e40841f2282d5"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "00753c122cbec9f9965dd410fb7d38f5db829d8f60997308612b88311361645c"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "24",
+        "nest": "10",
+        "peerProfile": "minimum"
+      },
+      "node": "v24.11.1",
+      "npm": "11.6.2",
+      "installedVersions": {
+        "@nestjs/common": "10.4.22",
+        "@nestjs/core": "10.4.22",
+        "@nestjs/testing": "10.4.22",
+        "@nestjs/platform-express": "10.4.22",
+        "@nestjs/platform-fastify": "10.4.22",
+        "ioredis": "5.0.0",
+        "pg": "8.11.0",
+        "@types/pg": "8.11.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node24-nest10-minimum/validation.json",
+      "reportSha256": "b862d8ad5dc0cbaa6e198a51f6a04eccab6f88509005e65417dcfb9a96b57cac",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "a3a92fba415804911f21e2b328e3938a8df1be6343b88c3a50e6ce5e6cd1bb4d"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "74e941f09b2ff52a16bd57ea551eac53e76b6667e3b1a81bd61b6228c53d26f5"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "b33a8f86f64ff2c4cacbc18a5d0f3db654d90ac1d218b0f74e3229b9414a93ac"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "24",
+        "nest": "10",
+        "peerProfile": "representative"
+      },
+      "node": "v24.11.1",
+      "npm": "11.6.2",
+      "installedVersions": {
+        "@nestjs/common": "10.4.22",
+        "@nestjs/core": "10.4.22",
+        "@nestjs/testing": "10.4.22",
+        "@nestjs/platform-express": "10.4.22",
+        "@nestjs/platform-fastify": "10.4.22",
+        "ioredis": "5.10.1",
+        "pg": "8.20.0",
+        "@types/pg": "8.20.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node24-nest10-representative/validation.json",
+      "reportSha256": "ad0c8635b159c598c6e69e56d8b9534f5c52fe0e31f75d65d0a21ef639e1096b",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "cd407908a777a1410f98bb9de631dc2ab95f3431b9ec267e6766b5d3e50adaa6"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "02dca42078f94f0bf8f33fc500b32d3c3f4ac6ec68a6da12a44e851a4e58e44f"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "43aa80bfd0951c92c93076391258c5df512d8708d80fe819418775ed7f0d1244"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "24",
+        "nest": "11",
+        "peerProfile": "minimum"
+      },
+      "node": "v24.11.1",
+      "npm": "11.6.2",
+      "installedVersions": {
+        "@nestjs/common": "11.1.18",
+        "@nestjs/core": "11.1.18",
+        "@nestjs/testing": "11.1.18",
+        "@nestjs/platform-express": "11.1.18",
+        "@nestjs/platform-fastify": "11.1.18",
+        "ioredis": "5.0.0",
+        "pg": "8.11.0",
+        "@types/pg": "8.11.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node24-nest11-minimum/validation.json",
+      "reportSha256": "31c11d73fd5fbed26c1bf8024d3292325354f9439e6548d08ddc786d268d2f4c",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "237eaa50d6dde90266592b2ca916c91426d3c5fe77c85d616e396daafcd048d3"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "ec0e3eef4e323e1d40df23112abf190e64cd690e069c51b75b1203681e3cbe11"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "7c244e05df4e214880601302452f2d07b607853d7665ffcdacf5bdcb5976aa79"
+        }
+      }
+    },
+    {
+      "cell": {
+        "node": "24",
+        "nest": "11",
+        "peerProfile": "representative"
+      },
+      "node": "v24.11.1",
+      "npm": "11.6.2",
+      "installedVersions": {
+        "@nestjs/common": "11.1.18",
+        "@nestjs/core": "11.1.18",
+        "@nestjs/testing": "11.1.18",
+        "@nestjs/platform-express": "11.1.18",
+        "@nestjs/platform-fastify": "11.1.18",
+        "ioredis": "5.10.1",
+        "pg": "8.20.0",
+        "@types/pg": "8.20.0"
+      },
+      "services": {
+        "postgres": "16.14",
+        "redis": "7.2.7"
+      },
+      "result": "pass",
+      "jest": {
+        "suites": 41,
+        "passed": 937,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "consumer": {
+        "passed": 45,
+        "expectedFailures": 3,
+        "skipped": 0
+      },
+      "crash": {
+        "scenarios": 10
+      },
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "artifactSha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "report": "/private/tmp/idempotency-s8-run/evidence/node24-nest11-representative/validation.json",
+      "reportSha256": "14bd5316b6ad49d7c431ce7953b99232996e0af5948d63340ea95898d522ab0d",
+      "evidence": {
+        "jest": {
+          "path": "jest.json",
+          "sha256": "835253c3a039e4d6be75ebb012bf675f649eedaac72b2a442c427dd89026b5c0"
+        },
+        "s5": {
+          "path": "s5-real-storage.json",
+          "sha256": "993c658b7788c88e9c2f32fceef958a12a113751c9ff1c93bcf36ff29426f52f"
+        },
+        "consumer": {
+          "path": "consumer/summary.json",
+          "sha256": "9345b214fd70d0bd2b2b508f0902921b574ccfb34d8a404db12eb7926499ecdb"
+        }
+      }
+    }
+  ],
+  "totals": {
+    "matrixCells": 8,
+    "sourceTestsPassed": 7496,
+    "sourceTestsSkipped": 0,
+    "consumerChecksPassed": 360,
+    "expectedMissingPgTypesFailures": 24,
+    "consumerSkipped": 0,
+    "gateTestsPassed": 45,
+    "gateTestsFailed": 0,
+    "gateTestsSkipped": 0
+  },
+  "coverage": {
+    "cell": "node24-nest11-representative",
+    "requiredPercent": 80,
+    "result": "pass",
+    "summary": {
+      "lines": {
+        "total": 645,
+        "covered": 632,
+        "skipped": 0,
+        "pct": 97.98
+      },
+      "statements": {
+        "total": 704,
+        "covered": 690,
+        "skipped": 0,
+        "pct": 98.01
+      },
+      "functions": {
+        "total": 120,
+        "covered": 118,
+        "skipped": 0,
+        "pct": 98.33
+      },
+      "branches": {
+        "total": 364,
+        "covered": 339,
+        "skipped": 0,
+        "pct": 93.13
+      },
+      "branchesTrue": {
+        "total": 0,
+        "covered": 0,
+        "skipped": 0,
+        "pct": "Unknown"
+      }
+    },
+    "path": "/private/tmp/idempotency-s8-run/evidence/node24-nest11-representative/coverage"
+  },
+  "artifactTransfer": {
+    "result": "pass",
+    "method": "Copy original candidate and all eight validation outputs to promoted directory, then verify from a separate clean checkout with no node_modules",
+    "checkout": "/private/tmp/idempotency-s8-run/publish-checkout",
+    "artifactVerifyLog": "/private/tmp/idempotency-s8-run/promoted-artifact-verify.log",
+    "matrixVerifyLog": "/private/tmp/idempotency-s8-run/promoted-matrix-verify.log",
+    "aggregateLog": "/private/tmp/idempotency-s8-run/matrix-verify.log",
+    "sameChecksum": true
+  },
+  "publishDryRun": {
+    "command": "npm publish ../promoted/nestarc-idempotency-0.4.0.tgz --dry-run --ignore-scripts --access public --json",
+    "cwd": "/private/tmp/idempotency-s8-run/publish-checkout",
+    "exitCode": 0,
+    "result": "pass",
+    "output": "/private/tmp/idempotency-s8-run/publish-dry-run.json",
+    "log": "/private/tmp/idempotency-s8-run/publish-dry-run.log",
+    "afterVerify": "/private/tmp/idempotency-s8-run/after-dry-run-verify.log",
+    "actualPublish": false,
+    "provenanceVerified": false
+  },
+  "negativeIntegration": {
+    "date": "2026-10-07",
+    "capturedAt": "2026-10-07T12:21:45.044Z",
+    "result": "pass",
+    "purpose": "Concrete negative integration probes; every intended failure was rejected",
+    "candidate": {
+      "manifest": "/private/tmp/idempotency-s8-run/candidate/artifact.json",
+      "commit": "6f9a35925d3a10eda076450f030c46494357a66a",
+      "sha256": "0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17",
+      "originalUnmodified": true
+    },
+    "environment": {
+      "node": "v24.11.1",
+      "nest": "11",
+      "peerProfile": "representative",
+      "postgresDatabase": "idempotency_s8",
+      "redisDatabase": 6,
+      "servicesEnvironment": "/private/tmp/idempotency-s8-services/environment.sh"
+    },
+    "consumerFixture": {
+      "clone": "/private/tmp/idempotency-s8-run/negative-consumer-clone",
+      "changedFile": "test/consumers/memory/runtime.cjs",
+      "injection": "throw new Error('S8_INTENTIONAL_CONSUMER_FIXTURE_FAILURE');",
+      "command": [
+        "node",
+        "scripts/consumer-package.mjs",
+        "--tarball",
+        "/private/tmp/idempotency-s8-run/candidate/nestarc-idempotency-0.4.0.tgz",
+        "--nest",
+        "11",
+        "--peer-profile",
+        "representative",
+        "--output",
+        "/private/tmp/idempotency-s8-run/negative-consumer-output"
+      ],
+      "cwd": "/private/tmp/idempotency-s8-run/negative-consumer-clone",
+      "expected": "runner exit 1 and failed summary from injected memory runtime",
+      "exitCode": 1,
+      "result": "pass",
+      "summaryResult": "fail",
+      "checks": {
+        "passed": 41,
+        "expectedFailure": 3,
+        "failed": 1,
+        "skipped": 0
+      },
+      "failedCheck": "memory-consumer",
+      "summary": "/private/tmp/idempotency-s8-run/negative-consumer-output/summary.json",
+      "summarySha256": "7660544536fe85c527fd6da52ee00e2edc431a746dcfe32a986212c87e42e271",
+      "runnerLog": "/private/tmp/idempotency-s8-run/negative-consumer.log",
+      "injectedFailureLog": "/private/tmp/idempotency-s8-run/negative-consumer-output/13-memory-runtime.log"
+    },
+    "consumerGate": {
+      "command": [
+        "/usr/local/bin/node",
+        "/private/tmp/idempotency-s8-run/negative-consumer-gate-probe.mjs"
+      ],
+      "expected": "actual failed consumer summary rejected",
+      "exitCode": 1,
+      "result": "pass",
+      "diagnostic": "Consumer result must be pass without skips",
+      "log": "/private/tmp/idempotency-s8-run/negative-consumer-gate.log"
+    },
+    "artifactProbes": [
+      {
+        "name": "missing-manifest",
+        "command": [
+          "/usr/local/bin/node",
+          "/private/tmp/idempotency-s8-run/snapshot/scripts/release-validation.mjs",
+          "verify-artifact",
+          "--artifact",
+          "/private/tmp/idempotency-s8-run/negative-artifacts/missing-manifest.json",
+          "--expected-commit",
+          "6f9a35925d3a10eda076450f030c46494357a66a"
+        ],
+        "expected": "rejection",
+        "exitCode": 1,
+        "result": "pass",
+        "diagnostic": "RELEASE GATE FAILED: Required evidence file missing: /private/tmp/idempotency-s8-run/negative-artifacts/missing-manifest.json",
+        "log": "/private/tmp/idempotency-s8-run/negative-artifacts/missing-manifest.log"
+      },
+      {
+        "name": "missing-tarball",
+        "command": [
+          "/usr/local/bin/node",
+          "/private/tmp/idempotency-s8-run/snapshot/scripts/release-validation.mjs",
+          "verify-artifact",
+          "--artifact",
+          "/private/tmp/idempotency-s8-run/negative-artifacts/missing-tarball/artifact.json",
+          "--expected-commit",
+          "6f9a35925d3a10eda076450f030c46494357a66a"
+        ],
+        "expected": "rejection",
+        "exitCode": 1,
+        "result": "pass",
+        "diagnostic": "RELEASE GATE FAILED: Artifact tarball missing: /private/tmp/idempotency-s8-run/negative-artifacts/missing-tarball/nestarc-idempotency-0.4.0.tgz",
+        "log": "/private/tmp/idempotency-s8-run/negative-artifacts/missing-tarball.log"
+      },
+      {
+        "name": "tampered-tarball",
+        "command": [
+          "/usr/local/bin/node",
+          "/private/tmp/idempotency-s8-run/snapshot/scripts/release-validation.mjs",
+          "verify-artifact",
+          "--artifact",
+          "/private/tmp/idempotency-s8-run/negative-artifacts/tampered/artifact.json",
+          "--expected-commit",
+          "6f9a35925d3a10eda076450f030c46494357a66a"
+        ],
+        "expected": "rejection",
+        "exitCode": 1,
+        "result": "pass",
+        "diagnostic": "RELEASE GATE FAILED: Artifact checksum mismatch\n+ actual - expected\n\n+ '6f823e1ccd69432438110a0d1529adb2a2ed32c982eeab1c0b416fbe33a6da37'\n- '0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17'",
+        "log": "/private/tmp/idempotency-s8-run/negative-artifacts/tampered-tarball.log"
+      },
+      {
+        "name": "wrong-commit",
+        "command": [
+          "/usr/local/bin/node",
+          "/private/tmp/idempotency-s8-run/snapshot/scripts/release-validation.mjs",
+          "verify-artifact",
+          "--artifact",
+          "/private/tmp/idempotency-s8-run/candidate/artifact.json",
+          "--expected-commit",
+          "0000000000000000000000000000000000000000"
+        ],
+        "expected": "rejection",
+        "exitCode": 1,
+        "result": "pass",
+        "diagnostic": "RELEASE GATE FAILED: Artifact commit mismatch\n+ actual - expected\n\n+ '6f9a35925d3a10eda076450f030c46494357a66a'\n- '0000000000000000000000000000000000000000'",
+        "log": "/private/tmp/idempotency-s8-run/negative-artifacts/wrong-commit.log"
+      }
+    ],
+    "limitations": [
+      "Negative fixture intentionally modifies only a separate cloned checkout; it does not claim clean source validation.",
+      "No publish, tag, push, workflow dispatch, or production service access."
+    ]
+  },
+  "workflowChecks": {
+    "result": "pass",
+    "checks": [
+      "js-yaml parse ci.yml/release.yml/release-validation.yml/docker-compose.yml",
+      "bash -n all run blocks",
+      "shared reusable caller identity",
+      "eight exact matrix cells",
+      "both real service health checks/URLs",
+      "aggregate dependency before promotion",
+      "dispatch excludes publish",
+      "publish uses exact tarball and --ignore-scripts without install/build/pack",
+      "npm environment and id-token retained",
+      "git diff --check"
+    ],
+    "remoteDispatchPerformed": false
+  },
+  "initialRegression": {
+    "problem": "ioredis5.0.0 lacks named Redis export; emitted public declaration failed minimum-peer consumer",
+    "fix": "Use default Redis type import in source and matching test imports",
+    "failureSummary": "/private/tmp/s8-consumer-nest10-minimum-initial/summary.json",
+    "finalRetest": "All eight final candidate cells pass"
+  },
+  "rc": {
+    "scenarios": [
+      "single-user JSON API",
+      "multi-tenant API",
+      "PostgreSQL webhook"
+    ],
+    "plan": "docs/1.0.0/release-candidate.md",
+    "externalAdoption": "not performed; no team/environment supplied",
+    "productionRollout": "not performed"
+  },
+  "limitations": [
+    "GitHub Actions/Ubuntu service-container execution was not dispatched; local macOS real services and identical CLI were executed.",
+    "Node22.23.3/24.11.1, Nest10.4.22/11.1.18 and the exact optional-peer profiles are tested, not every version in peer ranges or transitive lower bounds.",
+    "PostgreSQL16.14 native binary runs as x86_64 on the arm64 host; CI PostgreSQL16-alpine/Redis7-alpine patch versions may differ.",
+    "Provider recipe uses a local simulator and legacy reader is a model; real provider failover, production durability, ingress fencing and rollout/rollback remain application-owned.",
+    "GitHub OIDC/provenance and registry publication were not exercised; only npm --dry-run was executed.",
+    "Final future tag commit must rerun the shared clean gate; the validation snapshot is a local implementation commit.",
+    "Result-only documentation/JSON changes were made after the validation snapshot; shipped files, source, scripts, fixtures and workflows remain byte-identical."
+  ]
+}

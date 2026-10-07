@@ -2,7 +2,7 @@
 
 이 문서는 `@nestarc/idempotency` 1.0.0 개발을 이어갈 때의 시작점이다. [조사 문서](../1.0.0-stabilization-research.md)는 발견 당시의 근거를 보존하고, 이 작업판과 작업별 문서는 구현 상태와 다음 행동을 관리한다.
 
-작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1~S7 완료, S8 미착수다.** 아직 릴리스하지 않았다. 최종 지원 버전 전체 검증과 출시 gate는 S8에 남아 있다.
+작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1~S8 구현과 로컬 통합 검증 완료.** 아직 릴리스하지 않았다. S8의 clean snapshot·동일 tarball은 지원 8개 조합을 통과했다. 외부 RC/운영 도입은 미실시이며 실제 출시 tag의 GitHub gate와 게시 판단은 별도다.
 
 ## 문서 사용 순서
 
@@ -34,7 +34,7 @@
 | S5 | [장애와 요청 수명주기](work-items/S5-failure-lifecycle.md) | DONE | Codex | S1의 응답 완료 경계, S6의 만료/token 수명 계약 | D05/D06 수명 계약, 실제 crash10개 포함768 pass/0 skip, 운영 조정 가이드·S7/S8 인계 완료 |
 | S6 | [저장소 공통 계약](work-items/S6-storage-contract.md) | DONE | Codex | 없음 | D06 긴 TTL·직접 호출 선행 검증 완료. 실제 Redis/PG 포함908 pass/0 skip, S7/S8 인계 |
 | S7 | [도입 예제와 전환 문서](work-items/S7-adoption-docs.md) | DONE | Codex | S1~S6의 확정 계약 | D07 확정, 전체937 pass/0 skip·소비자45 pass/기대 실패3, 실행 예제·전환 절차를 S8에 인계 |
-| S8 | [출시 검증](work-items/S8-release-validation.md) | TODO | 미배정 | S1~S7 완료 | 현재 CI와 release의 실제 DB skip 경로 확인 |
+| S8 | [출시 검증](work-items/S8-release-validation.md) | DONE | Codex | S1~S7 완료 | D08 확정, 8개 cell 각각937 pass/0 skip·동일 tarball 소비자·실패 gate 검증. 실제 tag/외부 RC/출시는 별도 판단 |
 
 선행 조건은 최종 완료를 위한 조건이다. S4의 노출 회귀 테스트, S7의 DI 수정·예제 작성, S8의 CI 준비는 먼저 할 수 있다. S1~S8은 기능 묶음이며 한 커밋의 크기를 강제하지 않는다. 각 문서의 `S번호-번호` 체크리스트를 작은 구현·검증 단위로 사용한다. 더 나눌 필요가 있으면 같은 ID 아래에 추가하고 부모의 완료 조건을 유지한다.
 
@@ -59,7 +59,7 @@ npm run build
 npm run test:all -- --runInBand
 ```
 
-실제 저장소 검증에는 테스트 전용 `TEST_DATABASE_URL`과 `TEST_REDIS_URL`이 필요하다. 현재 [docker-compose.yml](../../docker-compose.yml)은 Postgres만 제공하므로 Redis는 별도 테스트 인스턴스가 필요하다. 연결 문자열의 비밀번호·토큰은 결과 문서에 남기지 않는다. `npm run prepublishOnly` 실행 시에도 실제 DB 환경이 없으면 관련 검사가 skip될 수 있다.
+실제 저장소 검증에는 테스트 전용 `TEST_DATABASE_URL`과 `TEST_REDIS_URL`이 필요하다. [docker-compose.yml](../../docker-compose.yml)은 PG16/Redis7을 함께 제공한다 (`docker compose up -d --wait`). 연결 문자열의 비밀번호·토큰은 결과 문서에 남기지 않는다. `npm run prepublishOnly` 실행 시에도 실제 DB 환경이 없으면 관련 검사가 skip될 수 있다.
 
 조사 당시 결과는 lint·타입 검사·build·pack dry-run 성공, **198 pass / 39 skip**이었다. skip은 Postgres 28개와 실제 Redis 11개이며 Docker daemon이 없었다. 이 결과는 새 구현이나 출시 대상의 검증을 대신하지 않는다. 임시 probe나 형제 프로젝트의 의존성을 새 검증의 전제로 사용하지 말고, 필요한 fixture·개발 의존성을 이 저장소에서 재현 가능하게 준비한다.
 
@@ -74,6 +74,14 @@ npm run test:all -- --runInBand
 | 2026-10-07 | `e13b370` + S5 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | prepublishOnly, 개발 타입 검사, 실제 crash fixture, tarball 소비자 | 768 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S5 기록](work-items/S5-failure-lifecycle.md); S4 최종 통합, D06 수명 계약; S6-5/S8 잔여 |
 | 2026-10-07 | `2074060` + S6 작업 트리 | Node24.11.1 / Nest11.1.18 / Redis7.2.7 / PG16.14 | lint/type/build, 전체 테스트, 실제 tarball 소비자 | 908 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S6 기록](work-items/S6-storage-contract.md), D06 전체 완료; S7/S8 잔여 |
 | 2026-10-07 | `8e22192` + S7 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | lint/type, build·adoption gate, 최종 전체 회귀 | 937 pass / 0 skip; 소비자45 pass / 기대된 실패3 / 0 skip | [S7 기록](work-items/S7-adoption-docs.md), D07·예제·전환 인계; S8 잔여 |
+| 2026-10-07 | `34e54f2` + S8 변경을 고정한 로컬 clean snapshot `6f9a359` | Node22.23.3/24.11.1 × Nest10.4.22/11.1.18 × optional peer 하한/대표; PG16.14/Redis7.2.7 | 공통 build/validate/verify-matrix, 동일 tarball 전달·게시 dry-run, 실제 실패 주입 | 8개 cell 각각41 suites/937 pass/0 skip, 소비자45 pass/기대 실패3/0 skip; gate45 pass | [S8 기록](work-items/S8-release-validation.md), [증거 JSON](evidence/S8-validation.json); remote CI/외부 RC/게시 미실시 |
+
+S8 최신 증거: Node22/24 × Nest10/11 × optional peer 하한/대표 **8개 cell**에서 전체 검증과 동일 tarball 소비자 검증 완료.
+각 cell은 실제 PG/Redis 포함 **937 pass / 0 skip**, 소비자 **45 pass / 기대된 실패3 / 0 skip**이다.
+실패 gate **45 pass**, 실제 소비자 fixture 실패 및 artifact 누락/변조/commit 불일치 거절도 확인했다.
+Node20 지원 종료, ioredis5.0.0 공개 선언 호환 수정, 공통 CI/release gate·동일 artifact 게시·검증 전용 dispatch를 반영했다.
+[상세 S8](work-items/S8-release-validation.md#2026-10-07-s8-최종-구현과-검증), [D08](decisions.md#d08--출시-matrix와-동일-artifact-decided),
+[RC 미실시 한계와 시나리오](release-candidate.md)를 따른다. 실제 npm publish/tag/push/remote dispatch는 수행하지 않았다.
 
 S7 최신 증거: sweep DI 수정, 공식 예제와 결제/주문/webhook recipe, D07 전환·rollback 안내 완료.
 실제 Redis7.2.7/PG16.14 포함 전체 **41 suites / 937 pass / 0 skip**, lint·타입·build 통과.
@@ -129,12 +137,13 @@ Express adapter11.1.18/Fastify adapter11.1.19, class-transformer0.5.1.
 
 ## 출시 준비 완료 조건
 
-- [ ] S1~S8의 완료 기준과 검증 증거가 기록되어 있다.
-- [ ] 구현에 영향을 주는 미결 결정이 없으며 공개 API·키 형식·schema·실패 정책·런타임 지원 변경을 S7에 반영했다.
-- [ ] 실제 Redis/Postgres 필수 검사가 skip 없이 통과했고, 실제 tarball의 소비자 설치·strict 타입 검사·실행을 확인했다.
-- [ ] 검증 대상 commit/artifact와 게시할 artifact가 일치한다.
-- [ ] 최초 요청과 replay의 응답·사용자 격리, 장애 후 재시도·기존 레코드 전환 조건을 검증했다.
-- [ ] RC에서 확인한 구성과 미확인 한계를 기록했다. 외부 도입팀 검증을 확보하지 않았다면 완료했다고 쓰지 않는다.
+- [x] S1~S8의 구현·로컬 완료 기준과 검증 증거가 기록되어 있다.
+- [x] 구현에 영향을 주는 미결 결정이 없으며 공개 API·키 형식·schema·실패 정책·런타임 지원 변경을 S7에 반영했다.
+- [x] 실제 Redis/Postgres 필수 검사가 skip 없이 통과했고, 실제 tarball의 소비자 설치·strict 타입 검사·실행을 확인했다.
+- [x] 로컬 검증 대상 commit/artifact와 게시 입력이 일치하는 전달 경로 및 npm dry-run을 확인했다.
+- [ ] 실제 출시 version/tag 대상 clean commit에서 GitHub gate를 다시 실행하고 별도 출시 결정을 기록한다.
+- [x] 최초 요청과 replay의 응답·사용자 격리, 장애 후 재시도·기존 레코드 전환 조건을 자동 fixture로 검증했다. 운영 rollout/rollback은 별도다.
+- [x] RC 시나리오와 미확인 한계를 기록했다. 외부 도입팀 검증은 미실시이며 완료로 간주하지 않는다.
 
 이 조건의 완료는 출시 준비 완료를 뜻한다. 이 문서 작성 요청 자체가 npm publish·태그 push를 실행하라는 지시는 아니다.
 
@@ -154,3 +163,5 @@ Express adapter11.1.18/Fastify adapter11.1.19, class-transformer0.5.1.
 | 2026-10-07 | S5 완료: handler/capture 경계 분리, 취소·불명 쓰기·실제 child crash10개, 전체768 pass, 소비자 검증·운영 조정 문서. S4 최종 완료, S6 core 통합 및 S6-5 잔여 기록. |
 | 2026-10-07 | S6 완료: D06 TTL 범위·직접 호출 검증, Memory deadline 분할 timer, 실제 Redis/PG 공통 계약·전체908 pass/0 skip 및 tarball 소비자 검증. S7/S8 인계. |
 | 2026-10-07 | S7 완료: sweep DI 재현·수정, 공개 예제 compile/init/close·업무 recipe·D07 전환/rollback, 전체937 pass/0 skip 및 실제 tarball 소비자45 pass/기대된 실패3. S8 인계. |
+| 2026-10-07 | S8 완료: D08 지원8개 조합·실DB skip0·동일 tarball 소비자·45개 실패 gate와 실제 실패 주입, artifact 전달/게시 dry-run, RC 시나리오와 외부 미실시 한계 기록. 실제 출시는 별도. |
+| 2026-10-07 | 후속 버전 bump: package/lockfile 1.0.0 및 CHANGELOG 갱신. 기존 S8 증거는 bump 이전 0.4.0으로 보존하며 최종 1.0.0 artifact는 공통 gate에서 재검증한다. 게시/tag/push 미실시. |

@@ -5,8 +5,8 @@ correctness very seriously. Please read this page before your first PR.
 
 ## Prerequisites
 
-- Node.js ≥ 20 (the `engines` field in `package.json`).
-- npm ≥ 9 (for `npm pkg get`, provenance, and workspaces support).
+- Node.js 22 or 24 (the `engines` field in `package.json`).
+- npm 10 or 11 (the bundled version for Node22/24); publishing uses Node24/npm11 and npm Trusted Publishing.
 - PostgreSQL 16 and Redis 7 for real-adapter, adoption and failure-lifecycle
   verification. Some unit tests use mocks/Memory, but they do not replace these
   service checks. Use test-only databases: fixtures create/truncate/drop tables
@@ -35,16 +35,17 @@ export TEST_REDIS_URL=redis://localhost:6379
 npm run test:adoption
 ```
 
-`docker compose up -d postgres` starts the repository's PostgreSQL service;
-provide a separate test Redis. The adoption command covers wiring, recipes and
+`docker compose up -d --wait` starts PostgreSQL 16 and Redis 7 with health checks. The adoption command covers wiring, recipes and
 migration, then builds and installs the actual tarball for public-import examples.
 See [S7](docs/1.0.0/work-items/S7-adoption-docs.md) for evidence and limitations.
 
-Current CI runs Node20/22 × Nest10/11, PostgreSQL tests and a separate Redis smoke
-job. It does not yet enforce the complete real-storage failure/adoption suite or
-actual-tarball consumer gate. Release validation and the final supported matrix
-remain [S8](docs/1.0.0/work-items/S8-release-validation.md); a green existing CI
-run alone is not evidence that those gates passed.
+CI and release use the same reusable validation workflow: Node22/24 × Nest10/11
+× minimum/representative optional peers. Every cell runs the complete source suite
+and actual-tarball consumers with both PostgreSQL 16 and Redis 7. Express and
+Fastify are exercised within each cell. Missing services, skips/todos, missing
+required specs, reduced assertion counts, consumer failures and artifact mismatch
+fail the gate. Exact versions live in `scripts/release-matrix.mjs`.
+See [S8](docs/1.0.0/work-items/S8-release-validation.md) for recorded evidence.
 
 ### Isolated package consumers
 
@@ -57,8 +58,7 @@ specific artifact. The runner preserves generated lockfiles, installed trees,
 logs and a checksum. See [consumer fixtures](test/consumers/README.md).
 
 `--skip-services` is available for partial local checks and records explicit
-skips; it is insufficient for S2/S7/S8 completion. CI/release integration of this
-runner and the final supported version matrix are tracked in S8.
+skips; it is insufficient for S2/S7/S8 completion and the release gate rejects it.
 
 ### Failure lifecycle experiments
 
@@ -125,8 +125,10 @@ Releases are driven by git tags that match `v*.*.*` and fire the
 4. **Tag** the commit: `git tag v0.1.4 && git push origin v0.1.4`.
 5. **Push** main + the tag. The `release.yml` workflow will:
    - Verify the tag matches `package.json`.
-   - Run the full `prepublishOnly` chain on a clean runner.
-   - Publish to npm with `--provenance --access public`.
+   - Build and pack once, then validate that artifact in all eight cells.
+   - Preserve the SHA-256, commit, test JSON, consumer lockfiles and logs.
+   - Verify the complete matrix and download the validated artifact for publication.
+   - Publish that exact tarball with `--ignore-scripts --provenance --access public`.
    - Create a GitHub Release with the CHANGELOG excerpt.
 
 ### Publishing authentication and current limits
@@ -137,24 +139,43 @@ trusted publisher for repository `nestarc/idempotency`, workflow `release.yml`,
 and environment `npm`. The publish job selects Node24. Review the actual
 [release workflow](.github/workflows/release.yml) before changing authentication.
 
-The current release test job supplies PostgreSQL only, so Redis-dependent and
-combined failure/adoption checks are not enforced. The test job checks the
-source/build and runs `npm pack --dry-run`; it does not test an installed
-tarball. The publish job builds again from the checkout. S8 must
-close these gaps and record the tested artifact checksum before 1.0 publication.
-Do not treat a package dry run as a completed release validation.
+The publish job does not install dependencies, rebuild, repack, or rerun lifecycle
+scripts. It checks the downloaded artifact's commit/version/checksum and all eight
+validation records before passing its explicit `.tgz` path to npm. Missing or
+changed artifacts fail closed. Registry configuration and publication remain
+separate release actions; running local validation never publishes anything.
 
-### Manual / emergency publish
+### Validation without publishing
 
-If the tag path has a hiccup, you can dispatch the release workflow
-from the Actions tab:
+**Actions → Release → Run workflow** runs validation only. Manual dispatch cannot
+publish; publication is restricted to the matching tag-push path. CI invokes the
+same reusable workflow, so its service setup and validation commands match release.
 
-1. Go to **Actions → Release → Run workflow**.
-2. Pick the `main` branch.
-3. Set `dry_run: true` first to verify the pipeline, then re-run with
-   `dry_run: false` to actually publish.
-4. The GitHub Release step is skipped on manual dispatch — create the
-   release manually in that case.
+For a local candidate (both test-only service URLs must be set):
+
+```sh
+npm ci
+npm run test:release-gates
+npm run release:build -- --output /tmp/idempotency-candidate
+node scripts/release-matrix.mjs install --nest 11 --peer-profile representative
+npm run release:validate -- --artifact /tmp/idempotency-candidate/artifact.json \
+  --output /tmp/idempotency-validation-node24-nest11-representative \
+  --nest 11 --peer-profile representative
+```
+
+The build requires a clean checkout; `--allow-dirty` is an explicit local diagnostic
+option and its provenance cannot be promoted as a clean release candidate. Output
+directories must be fresh. Consumer installs remain outside the checkout. Use the
+matrix installer to select root dependencies before each validation and use the
+matching Node runtime; changing only a label does not validate a different version.
+Repeat for every declared cell, then run `npm run release:matrix -- --artifact
+/tmp/idempotency-candidate/artifact.json --evidence /tmp/idempotency-validation` with
+the cell output directories below that evidence directory. CI retains the artifacts
+for 14 days; save an approved candidate's evidence elsewhere before it expires.
+
+Default Jest and `prepublishOnly` remain useful development commands but can skip
+real services without URLs. Only the explicit release validation gate enforces the
+required service, test, consumer and artifact evidence.
 
 ## Style
 

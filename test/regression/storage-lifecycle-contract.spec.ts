@@ -6,7 +6,7 @@
  * The exact boundary tests deliberately do not run timers or sweep rows first.
  */
 import RedisMock from 'ioredis-mock';
-import type { Redis } from 'ioredis';
+import type Redis from 'ioredis';
 import { Pool, type PoolClient } from 'pg';
 
 import { MemoryStorage } from '../../src/storage/memory.storage';

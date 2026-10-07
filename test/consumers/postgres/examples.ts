@@ -103,7 +103,6 @@ async function verifyOwnedPostgresConnection(
     await storage.delete('owned-command', record.token);
     await module.close();
     closed = true;
-    assert.equal(owned.ended, true);
     await assert.rejects(owned.query('SELECT 1'), /Cannot use a pool after calling end/);
     console.log(
       'PASS async Postgres connection example compile/init/real I/O/close; adapter ends owned Pool',
@@ -112,7 +111,12 @@ async function verifyOwnedPostgresConnection(
     try {
       if (!closed) await module.close();
     } finally {
-      for (const owned of createdPools) if (!owned.ending) await owned.end();
+      for (const owned of createdPools) {
+        // Use public API behavior; pg 8.11's declarations do not expose ending/ended.
+        await owned.end().catch((error: Error) => {
+          assert.match(error.message, /Called end on pool more than once/);
+        });
+      }
     }
   }
 }

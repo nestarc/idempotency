@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import Redis from 'ioredis';
 import { Pool } from 'pg';
 
 import type { IdempotencyStorage } from '../../src/interfaces/idempotency-storage.interface';

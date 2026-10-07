@@ -1,5 +1,5 @@
 import RedisMock from 'ioredis-mock';
-import type { Redis } from 'ioredis';
+import type Redis from 'ioredis';
 
 import { RedisStorage } from '../../src/storage/redis.storage';
 import { describeStorageContract } from '../support/shared-storage-contract';

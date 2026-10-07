@@ -9,11 +9,11 @@
 
 소스 테스트 성공에서 끝나지 않고, 소비자가 받을 같은 배포물이 지원 환경에서 동작함을 확인한다.
 release 경로에서 실제 DB 검사가 빠지지 않도록 만들고, 검증한 commit·artifact를 추적할 수 있게 한다.
-이번 요청은 문서 작성이다. 이 문서를 읽었다는 이유로 실제 publish, tag 생성, push를 실행하지 않는다.
+초기 조사 요청은 문서 작성이었다. 2026-10-07 S8 진행 요청에 따라 아래 gate와 CI를 구현한다. 실제 publish, tag 생성, push, 원격 workflow dispatch는 실행하지 않는다.
 
 ## 확인된 근거와 재현 절차
 
-기존 CI는 Node 20/22 × Nest 10/11을 검사하며, 실제 Redis smoke와 Postgres 서비스가 이미 있다.
+조사 당시 CI는 Node 20/22 × Nest 10/11을 검사하며, 실제 Redis smoke와 Postgres 서비스가 이미 있다.
 release의 build-and-test 잡은 PG만 제공하므로 `TEST_REDIS_URL` 없는 Redis spec은 skip된다.
 release publish 잡은 다른 Node 환경에서 다시 build하므로 앞서 검증한 tarball을 그대로 게시하는 구조가 아니다.
 pack dry-run은 파일 구성 점검이며 설치/import/선언 파일 안전성을 입증하지 않는다.
@@ -53,14 +53,14 @@ fixture dependency/lockfile/스크립트는 저장소에 선언한다. 조사자
 
 ## 작업 체크리스트
 
-- [ ] **S8-1** 지원 matrix를 확정하고 package engines·문서·CI의 차이를 정리한다.
-- [ ] **S8-2** 일반 CI와 release 검증에서 PG/Redis 준비·health check·URL 전달을 일치시킨다.
-- [ ] **S8-3** DB 서비스/URL 누락과 필수 테스트 skip을 명시적으로 실패시키는 검증을 추가한다.
-- [ ] **S8-4** S2 consumer fixture를 동일 tarball로 실행하고 설치 목록·컴파일·부팅 결과를 수집한다.
-- [ ] **S8-5** tarball checksum/commit 기록과 검증 artifact 전달 경로를 구성한다.
-- [ ] **S8-6** S1–S7 회귀와 문서 recipe 검증을 모두 연결하고 정상·실패 경로를 검증 전용으로 실행한다.
-- [ ] **S8-7** JSON 단일 사용자 API, multi-tenant API, PG webhook의 RC 시나리오와 검증 기록을 준비한다.
-- [ ] **S8-8** 미해결 결함/미검증 환경을 정리하고 별도 출시 결정에 사용할 증거를 제출한다.
+- [x] **S8-1** 지원 matrix를 확정하고 package engines·문서·CI의 차이를 정리한다.
+- [x] **S8-2** 일반 CI와 release 검증에서 PG/Redis 준비·health check·URL 전달을 일치시킨다.
+- [x] **S8-3** DB 서비스/URL 누락과 필수 테스트 skip을 명시적으로 실패시키는 검증을 추가한다.
+- [x] **S8-4** S2 consumer fixture를 동일 tarball로 실행하고 설치 목록·컴파일·부팅 결과를 수집한다.
+- [x] **S8-5** tarball checksum/commit 기록과 검증 artifact 전달 경로를 구성한다.
+- [x] **S8-6** S1–S7 회귀와 문서 recipe 검증을 모두 연결하고 정상·실패 경로를 검증 전용으로 실행한다.
+- [x] **S8-7** JSON 단일 사용자 API, multi-tenant API, PG webhook의 RC 시나리오와 검증 기록을 준비한다.
+- [x] **S8-8** 미해결 결함/미검증 환경을 정리하고 별도 출시 결정에 사용할 증거를 제출한다.
 
 ## 완료 조건
 
@@ -85,7 +85,7 @@ fixture dependency/lockfile/스크립트는 저장소에 선언한다. 조사자
 테스트 전용 `TEST_DATABASE_URL`, `TEST_REDIS_URL`을 설정한 뒤 `npm run test:all -- --runInBand`를 실행한다.
 전체 prepublish 검사는 두 URL이 설정된 환경에서 `npm run prepublishOnly`로 확인할 수 있다. 이 명령 자체는 게시하지 않는다.
 `npm pack --json`으로 만든 tarball에 S2 소비자 실행기를 적용하고 실제 명령·checksum을 결과에 기록한다.
-PG는 기존 compose 서비스를 사용할 수 있다. 현재 compose에는 Redis가 없으므로 CI의 Redis 7 구성 또는 별도 테스트 서비스를 준비한다.
+PG16/Redis7은 `docker compose up -d --wait`로 함께 준비할 수 있다. 로컬 Docker가 없으면 같은 major의 전용 테스트 서비스를 사용하고 차이를 기록한다.
 DB DDL/전용 prefix 정리 권한, registry 접근, 로컬 HTTP 포트가 필요하다. 운영 서비스에 테스트를 실행하지 않는다.
 실DB skip, 포트/네트워크 제약, 설치 실패는 원인과 미검증 범위를 기록한다. green exit만으로 완료하지 않는다.
 실제 publish/tag/push 및 release workflow dispatch는 이 문서의 검증 명령에 포함하지 않는다.
@@ -145,10 +145,7 @@ Nest10·Node20/22·실제 PG/Redis opaque body 보존·tarball 소비자를 아�
 이제 기존 조사 baseline39 skip 대신 현행41 skip을 기준으로 환경을 복구하고 출시 gate에서 skip을 막는다.
 S1 완료는 S8 또는 1.0 출시 승인으로 해석하지 않는다.
 
-- 초기 기록: 구현 미착수. 마지막 갱신 2026-10-06.
-- 다음 행동: S8-1 지원 matrix를 결정하고 S8-2의 검증 전용 PG/Redis 잡 골격부터 준비한다.
-- 남은 이슈: 지원 정책·artifact 게시 방식 미결; S3–S7 완료와 최종 지원 matrix 통합 검증 대기. S2 대표 환경 증거는 위 인계 참조.
-- S8 자체 구현 검증 증거: 미기록. 위 S1 결과의41개 skip을 최종 출시 통과로 재사용하지 않는다.
+- 초기 미착수 기록은 아래 2026-10-07 구현·검증 기록으로 대체한다. S1~S7의 이전 수치를 S8 통합 실행으로 재사용하지 않는다.
 
 ### S5 장애·수명 검증 인수인계 (2026-10-07)
 
@@ -215,3 +212,103 @@ S8 matrix를 바꿀 때 consumer Nest testing과 HTTP adapter 버전도 함께 �
 현재 CI/release가 전체 실DB·소비자 gate 및 동일 tarball 게시를 강제하지 않는 점은 CONTRIBUTING에 명시했다.
 S8에서 필수 gate와 실제 배포 artifact를 연결한다. 모델0.4 reader와 로컬 provider simulator를 실제 구 binary/외부 결제사/production rollout 검증으로
 표현하지 않는다. 두 방향 모두 빈 namespace와 durable 업무 history, writer fencing·불명 결과 조정이 필요하며 SQL schema migration은 추가되지 않았다.
+
+
+## 2026-10-07 S8 최종 구현과 검증
+
+S8 구현 및 로컬 통합 검증을 완료했다. [D08](../decisions.md#d08--출시-matrix와-동일-artifact-decided)은 DECIDED다.
+작업 완료는 npm/RC/1.0 게시 또는 운영 출시 승인을 뜻하지 않는다. package version은 0.4.0이다.
+
+### 지원 정책과 검증 경로
+
+- engines: `^22.0.0 || ^24.0.0`. Node20 지원을 종료하고 README·CONTRIBUTING·전환 문서와 맞췄다.
+- Node22/24 × Nest10/11 × optional peer 하한/대표의 **8개 cell**을 필수로 한다. 각 cell 안에서 Express/Fastify를 모두 검사한다.
+- Nest common/core/testing/Express/Fastify는 10.4.22 또는 11.1.18로 일치시킨다. 하한은 ioredis5.0.0·pg/@types/pg8.11.0, 대표는 ioredis5.10.1·pg/@types/pg8.20.0이다.
+- [공통 workflow](../../../.github/workflows/release-validation.yml)를 일반 CI와 release가 함께 호출한다. PG16/Redis7 health check와 URL을 동일하게 제공하며 compose에도 Redis를 추가했다.
+- [gate 실행기](../../../scripts/release-validation.mjs)가 build → validate → verify-matrix를 연결한다. [검사 정책](../../../scripts/release-gates.mjs)은 두 서비스 preflight, 41개 필수 spec과 각 최소 assertion 수, 전체 skip/todo/실패=0, 실제 S5 10개 crash 시나리오, S7 recipe, tarball 소비자 결과를 검사한다.
+- 하나의 tarball에 commit·source snapshot·SHA-256을 기록하고 모든 cell이 그 파일을 설치한다. 시작/종료 시 소스와 tarball 불변성을 확인한다. 소비자 lockfile·설치 목록·컴파일/HTTP/DB 로그·summary 및 Jest/crash JSON을 artifact로 보존한다.
+- 최종 집계가 8개 cell과 각 하위 증거의 checksum을 재검증한 뒤에만 artifact를 승격한다. publish 잡은 install/build/pack 없이 전달받은 tarball과 commit/version/checksum/전체 matrix를 다시 검증하고 명시적인 tgz를 `npm publish --ignore-scripts --provenance --access public`에 넘긴다.
+- `workflow_dispatch`는 항상 검증 전용이다. 실제 publish는 일치하는 tag push에만 연결한다. 이번 작업은 원격 dispatch/tag/push/publish를 실행하지 않았다.
+
+### 하한 검사에서 수정한 결함
+
+ioredis5.0.0은 named `Redis` export를 제공하지 않아 기존 공개 선언 파일이 하한 소비자에서 실패했다.
+`src/storage/redis.storage.ts`와 관련 테스트 import를 default Redis import로 바꿨다. 런타임 저장소 계약은 바꾸지 않았다.
+PG fixture도 최신 타입에만 있는 비공개 `ended`/`ending` 속성 대신 종료 후 public query 거절을 검사한다.
+최초 실패는 `/private/tmp/s8-consumer-nest10-minimum-initial/summary.json`, 수정 뒤 사전 검사는
+`/private/tmp/s8-consumer-nest10-minimum-real/summary.json`과 Nest11 대응 경로에 보존했다.
+아래 최종 8개 cell은 별도의 최종 tarball로 다시 검사했다.
+
+### 대상과 실행 증거
+
+- 사용자 checkout 기준: `34e54f2891c00d823331347f23ef1dcbf4257d7c` + S8 변경.
+- 모든 구현·workflow·fixture를 별도 로컬 clone의 clean 검증 commit **`6f9a35925d3a10eda076450f030c46494357a66a`**로 고정했다. 사용자 저장소에 commit/tag/push를 만들지 않았다.
+- source snapshot SHA-256: `ba2c2f223c7bb701cddba22e15fd79bcead598ed6ed1ab0fec132be4de1a34c8`.
+- artifact: `/private/tmp/idempotency-s8-run/candidate/nestarc-idempotency-0.4.0.tgz`, **104 files**.
+- tarball SHA-256: **`0090b2a1b8c74306accfecbfc23c77f1b3ccdece1a298d8412326b219fc9be17`**.
+- 환경: macOS arm64, Node22.23.3/npm10.9.9 및 Node24.11.1/npm11.6.2, PostgreSQL16.14/Redis7.2.7. PG 바이너리는 x86_64 실행 환경이다. Docker daemon은 사용하지 않았다.
+- 네 개의 독립 Node/Nest clone에 fresh `npm ci` 후 대표→하한 profile을 설치해 검사했다. 동시 실행 간 간섭을 막기 위해 전용 PG database4개와 Redis database index4개를 분리했다. 소비자 프로젝트는 각 cell마다 새 격리 디렉터리에서 lockfile 생성 후 `npm ci`로 설치했다.
+
+| Node / npm | Nest | peer profile | 전체 Jest | 소비자 pass / 기대 실패 / skip |
+| --- | --- | --- | --- | --- |
+| 22.23.3 / 10.9.9 | 10.4.22 | representative | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 22.23.3 / 10.9.9 | 10.4.22 | minimum | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 22.23.3 / 10.9.9 | 11.1.18 | representative | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 22.23.3 / 10.9.9 | 11.1.18 | minimum | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 24.11.1 / 11.6.2 | 10.4.22 | representative | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 24.11.1 / 11.6.2 | 10.4.22 | minimum | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 24.11.1 / 11.6.2 | 11.1.18 | representative | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+| 24.11.1 / 11.6.2 | 11.1.18 | minimum | 41 suites / 937 pass / 0 skip | 45 / 3 / 0 |
+
+각 cell의 lint와 전체 타입 검사도 통과했다. 소비자의 기대 실패3개는 @types/pg 미설치 상태의
+node/node16/nodenext TS7016이며, 실제 타입 설치 후 같은 세 모드가 통과했다. skip으로 처리하지 않았다.
+Node24/Nest11/대표 cell에서 기존 coverage80% gate도 유지했다:
+statements98.01%, branches93.13%, functions98.33%, lines97.98%.
+실행 명령·개별 결과·checksum·로그 경로는 [보존 JSON](../evidence/S8-validation.json)을 따른다.
+
+정상 경로 명령은 clean 검증 clone에서 다음과 같다. cell마다 선택한 Node를 PATH에 지정하고 테스트 전용 URL을 제공했다.
+
+```sh
+npm ci
+node scripts/release-validation.mjs build --output ../candidate
+node scripts/release-matrix.mjs install --nest 11 --peer-profile representative
+node scripts/release-validation.mjs validate --artifact ../candidate/artifact.json \
+  --output ../evidence/node24-nest11-representative --nest 11 --peer-profile representative
+node scripts/release-validation.mjs verify-matrix --artifact ../candidate/artifact.json --evidence ../evidence
+```
+
+`test:all`에는 S1~S7 전체 회귀, S5 실제 crash, S6 공통 계약·native timer·실제 Redis PTTL,
+S7 sweep/migration/HTTP recipe가 포함된다. wrapper가 S5/S7 실제 서비스 필수 환경과 crash 증거 경로를 설정한다.
+consumer는 같은 tarball의 공개 import·strict TS·README quickstart·Nest lifecycle·실DB CRUD·소유권과
+Express/Fastify 실제 TCP 최초 요청/replay/422/close를 검사한다.
+
+### 실패 게이트와 artifact 전달
+
+`npm run test:release-gates`는 **45 pass / 0 fail / 0 skip**이다. URL 누락과 실제 접속 실패,
+누락/감소한 spec, skip/todo·집계 불일치, 실패/누락/변조된 consumer summary, 잘못된 실제 의존성 버전,
+artifact/SQL 누락·tarball 변조·commit/version 불일치, dirty source·source 변경과 matrix 누락을 거절한다.
+실패한 셀의 실행기 exit와 결과 JSON을 함께 보존하며, 실패 보고서를 정상 결과로 승격하지 않는다.
+
+최종 tarball과 8개 cell 증거를 `promoted/`로 복사하여 artifact 전달을 재현했다. 별도
+`publish-checkout/`에는 node_modules를 설치하지 않은 상태에서 verify-artifact와 verify-matrix를 실행해 통과했다.
+그 위치에서 `npm publish ../promoted/nestarc-idempotency-0.4.0.tgz --dry-run --ignore-scripts --access public --json`도 exit0이었고 이후 checksum 재검증이 통과했다. 실제 게시·OIDC/provenance는 실행하지 않았다.
+별도 clone에서 Memory runtime에 의도적 throw를 넣자 실제 소비자 runner와 실패 summary 검증이 각각 exit1이었다.
+manifest 누락·tarball 누락·변조·commit 불일치도 실제 verify-artifact CLI가 모두 exit1로 거절했다.
+명령·로그·실패 summary는 보존 JSON의 negativeIntegration을 따른다.
+
+### 완료 범위와 남은 출시 판단
+
+- [RC 기록](../release-candidate.md)에 JSON 단일 사용자 API, multi-tenant API, PG webhook 시나리오·통과/보류 기준과 도입팀 관찰 양식을 준비했다. 참여 팀이 제공되지 않아 **외부 RC/운영 도입 검증은 미실시**다.
+- 최종 구현에 대한 알려진 미해결 검증 실패는 없다. 결과 기록을 추가한 S8 문서/작업판/증거 JSON은 검증 snapshot 이후 갱신했으며 제품 소스·배포 README·workflow·fixture의 bytes는 그대로다.
+- GitHub Actions 서버의 실제 실행, Ubuntu Docker 서비스, registry OIDC/provenance 게시와 외부 provider/production 장애·전환·rollback은 이번 로컬 실행의 증거가 아니다. workflow YAML/쉘/구조를 검사했고 동일 CLI와 복사된 artifact 전달 경로를 로컬에서 실행했다.
+- 검증한 Nest patch와 optional peer 두 profile 밖의 모든 minor/patch, 모든 전이 의존성 하한, 지원하지 않는 Node/OS를 검증했다고 주장하지 않는다. PG16.14/Redis7.2.7은 CI 이미지 태그가 향후 가져올 patch 전체를 대표하지 않는다.
+- 다음 출시 담당자는 별도의 version/changelog/출시 판단 뒤 **실제 tag 대상 clean commit**에서 공통 gate를 다시 실행한다. 로컬 snapshot commit은 원격 release tag가 아니다. 보존된 CI artifact의 보관 기한은14일이며 승인된 증거는 만료 전에 별도 보존한다.
+
+
+### 2026-10-07 버전 bump 후속 기록
+
+사용자의 버전 bump 요청에 따라 package.json과 package-lock.json의 패키지 버전을
+**0.4.0 → 1.0.0**으로 올리고 CHANGELOG의 1.0 변경을 `1.0.0 / 2026-10-07`로 정리했다.
+위 S8 검증 commit·tarball·SHA-256과 JSON은 **bump 이전 0.4.0의 역사적 증거**로 그대로 보존한다.
+새 버전은 다른 artifact이므로 기존 checksum/8개 cell 결과를 1.0.0 게시 증거로 재사용하지 않는다.
+최종 clean commit에서 공통 release gate를 다시 실행한다. 이번 bump에서 tag/push/publish는 수행하지 않았다.

@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-07
+
 ### Added
 
 - Executable adoption examples for sync/async registration, connection ownership,
@@ -15,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Use the ioredis default export in public declarations so Redis consumers
+  compile with the supported ioredis 5.0.0 lower bound.
 - Inject the configured `IDEMPOTENCY_STORAGE` into `PostgresSweepService`, fixing
   README sync/async module startup without a second adapter or pool. Direct
   constructor calls are unchanged; manual Nest providers must use that token.
@@ -51,6 +55,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking runtime support change:** support Node.js 22 and 24
+  (`^22.0.0 || ^24.0.0`); Node.js 20 is no longer supported.
+- Share CI and release validation across all eight Node 22/24 × Nest 10/11 ×
+  minimum/representative optional-peer combinations. Every combination validates
+  the same tarball, including real Redis/PostgreSQL and isolated consumers,
+  with no skipped tests. Release publication requires the verified artifact and
+  matching tag; manual workflow dispatch performs validation only.
+- **Breaking observability transition:** replace `IdempotencyEvent.scope` with
+  a hashed `namespace`, retaining `keyHash` for request-key correlation without
+  guaranteeing continuity with 0.4 hashes. Event errors expose only fixed
+  `code`/`operation` classifications instead of original Error or driver
+  payloads. Package logs exclude raw keys, identities, paths, bodies and errors;
+  callback failures remain isolated from request outcomes. Neither hash is an
+  anonymity guarantee or suitable as a metric label.
 - Document handler-error token deletion, outer cancellation and crash recovery
   in the [failure lifecycle guide](docs/failure-recovery.md). Cancellation does
   not detach business execution for later recording; already-started storage

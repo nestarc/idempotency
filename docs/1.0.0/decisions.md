@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D07을 결정했다. D06은 긴 TTL·직접 입력 정책, D07은 업그레이드·롤백 절차를 포함하며 D08은 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D08을 결정했다. D06은 긴 TTL·직접 입력 정책, D07은 업그레이드·롤백 절차, D08은 지원 matrix와 동일 artifact 검증·게시 경로를 포함한다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -21,7 +21,7 @@
 | D05 | DECIDED | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
 | D06 | DECIDED | S6 | 만료·token·반복 complete, TTL 1~2,147,483,647초·직접 호출 선행 검증 | Memory/Redis/PG 동일 동작, custom adapter 검증·긴 TTL 지원, schema 변경 없음 |
 | D07 | DECIDED | S7 | 별도 빈 저장 namespace와 양 버전 공통 durable 업무 중복 방지; 중단·조정·전체 교체와 대칭 rollback | 모든 key/opaque body 변경, fingerprint 알고리즘·SQL schema 유지, import/관측/TTL/DI 호환 변경; 혼합 writer 금지 |
-| D08 | OPEN | S8 | 지원 Node/Nest/HTTP adapter 조합과 artifact 검증·게시 경로 | Node 20 유지 여부, 22/24 검증, 실DB skip 차단, 동일 artifact 검증, RC 증거 |
+| D08 | DECIDED | S8 | Node22/24 × Nest10/11 × optional peer 하한/대표, Express/Fastify; 한 번 생성한 tarball 검증·게시 | Node20 제외, 실DB 필수·skip 차단, artifact checksum/commit과 8개 cell 증거, 검증 전용 dispatch |
 
 ## 먼저 지켜야 할 경계
 
@@ -175,3 +175,16 @@ D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 �
 - 영향: 공개 시그니처·저장 key·SQL schema 변화 없음. Memory/Redis의 반복 완료, Memory/PG의 늦은 완료 결과가 바뀐다. custom adapter도 논리적 만료·complete-once 원자성 및 TTL 범위·검증 순서를 구현해야 한다. 과거 받아들인 상한 초과 TTL 또는 직접 호출의 잘못된 TTL은 이제 RangeError이며, 30일 Memory TTL은 조기 삭제되지 않는다.
 - 검증: 공유 contract의 동시 create/complete, 응답/TTL/createdAt 보존, 만료와 대체 token, Memory -1/0/+1ms, PG transaction의 고정 now 경계, 실제 Redis 서버 expiry에 긴 TTL·범위·직접 호출 검사를 추가했다. [S6 기록](work-items/S6-storage-contract.md)의 최종 증거와 [S5 기록](work-items/S5-failure-lifecycle.md)의 선행 통합 결과를 따른다.
 - 후속: S7에는 custom adapter 호환성과 TTL 설정 오류·전환 설명, S8에는 실제 DB 필수 검증·같은 tarball·지원 버전 전체 검증을 넘긴다.
+
+## D08 — 출시 matrix와 동일 artifact (DECIDED)
+
+- 날짜/결정자: 2026-10-07, Codex. S8 구현 요청 범위. 기준 `34e54f2891c00d823331347f23ef1dcbf4257d7c`.
+- 지원: Node22/24, Nest10/11, 같은 Nest major의 Express/Fastify. engines는 `^22.0.0 || ^24.0.0`으로 일치시킨다. [Node 공식 release 일정](https://github.com/nodejs/Release)에서 Node20은 EOL, 22/24는 LTS다. 20 호환 검사를 계속 유지하는 대안은 지원 종료 runtime의 유지 비용과 새 1.0 정책에 맞지 않아 제외한다. 26 및 홀수/future major는 별도 검증 후 추가한다. Node patch 전체나 Nest의 모든 minor를 실행했다는 뜻은 아니다.
+- 조합: Node2 × Nest2 × peer profile2 = 8 cell, 각 cell에서 source 전체 및 tarball Memory/Redis/PG 소비자와 Express/Fastify를 검사한다. `scripts/release-matrix.mjs`에서 버전을 고정한다. optional peer 하한은 ioredis5.0.0·pg/@types/pg8.11.0, 대표는 ioredis5.10.1·pg/@types/pg8.20.0이다. TS5.7.3/strict/skipLibCheck:false 및 node/node16/nodenext는 D02를 유지한다. Nest peer range는 유지하되 검증 patch와 range 전체의 차이는 명시한다.
+- 서비스: 공통 reusable workflow에 PG16/Redis7, health check, 두 URL을 함께 선언한다. 실제 접속 preflight 뒤 S1~S7 전체 Jest를 실행하고 S5 crash와 S7 recipe를 필수화한다. JSON의 실패/pending/todo가 0이어야 하며 필수 suite 및 suite별 최소 assertion 수를 고정하여 spec 누락/감소를 차단한다. 수 변경은 테스트 의도와 이 기준을 함께 리뷰한다.
+- artifact: clean checkout의 Node24에서 lint/type/build/pack을 한 번 수행한다. artifact manifest에 commit, package version, 파일 목록, SHA-256과 환경을 보존한다. 모든 cell은 이 tarball을 설치한다. consumer lockfile·npm ls·compile/runtime 로그·summary 및 전체 Jest/실제 crash 증거를 보존한다. matrix 집계 성공 후에만 verified artifact를 전달하며 publish job은 install/build/pack 없이 commit/version/SHA-256과 matrix 증거를 다시 검사하고 명시적인 `.tgz`를 `npm publish --ignore-scripts --provenance --access public`에 넘긴다. [npm의 tarball publish와 ignore-scripts](https://docs.npmjs.com/cli/v11/commands/npm-publish/)를 사용한다.
+- 대안: source 테스트 뒤 publish job에서 재빌드하면 검증한 byte와 게시 입력의 연결이 끊어진다. cell마다 pack하면 서로 다른 후보를 검증하게 된다. dist만 전달하면 tarball 설치 경계를 보장할 수 없다. 따라서 한 번 생성한 tarball과 checksum·commit을 전체 경로에서 재사용한다.
+- 실패 정책: URL 없음/연결 실패, spec 없음/skip/실행 수 감소, 소비자 실패/skip/summary 없음, tarball/manifest/검증 결과 없음과 checksum/commit/version 불일치는 실패다. 의도적 실패 fixture로 게이트 거절을 확인한다. 단순 green exit나 pack dry-run은 증거가 아니다.
+- 운영: CI와 release가 같은 reusable workflow를 호출한다. release 수동 dispatch는 검증 전용이며 publish는 일치하는 tag push에서만 가능하다. 기존 수동 publish 우회 경로를 제거한다. OIDC/registry 인증은 변경하지 않는다. 이번 작업에서 publish/tag/push/remote dispatch는 수행하지 않는다.
+- RC: [RC 시나리오와 기록](release-candidate.md)을 준비한다. 저장소 안의 자동화 시나리오와 외부 도입팀의 관찰을 구분한다. 참여 팀·운영 환경이 제공되지 않았으므로 외부 RC를 수행했다고 기록하지 않으며 운영 승인으로 간주하지 않는다.
+- 검증 결과/잔여: [S8](work-items/S8-release-validation.md)와 보존 JSON에 실제 환경·pass/fail/skip·동일 checksum·한계를 기록한다. code validation snapshot과 향후 tag 대상 commit은 구분하며 최종 tag에서 gate를 다시 실행한다.

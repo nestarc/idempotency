@@ -3,7 +3,7 @@
  * driver, or silently accepted them for missing/stale records. Validation
  * must reject before any lookup or command, independent of record ownership.
  */
-import type { Redis } from 'ioredis';
+import type Redis from 'ioredis';
 import type { Pool } from 'pg';
 
 import { MemoryStorage } from '../../src/storage/memory.storage';

@@ -5,7 +5,7 @@
 [![CI](https://github.com/nestarc/idempotency/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nestarc/idempotency/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@nestarc/idempotency.svg)](https://www.npmjs.com/package/@nestarc/idempotency)
 [![license](https://img.shields.io/npm/l/@nestarc/idempotency.svg)](./LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
+[![node](https://img.shields.io/badge/node-22%20%7C%2024-brightgreen.svg)](https://nodejs.org/)
 [![NestJS](https://img.shields.io/badge/NestJS-10.x%20%7C%2011.x-ea2845.svg)](https://nestjs.com/)
 [![provenance](https://img.shields.io/badge/npm-provenance-blue.svg)](https://docs.npmjs.com/generating-provenance-statements)
 
@@ -61,7 +61,7 @@ From 0.4, move Redis/Postgres classes and adapter option types out of root impor
 to the paths above. Move the sweep service and SweepOptions to `/postgres` too.
 Memory and common imports stay the same. Internal `dist/*` and storage-barrel
 paths are not public exports. This is an import change for 1.0; the package
-version remains 0.4.0 in this unreleased development tree.
+version is 1.0.0 in this release preparation tree; registry publication is separate.
 
 The root also exports `IdempotencyKeyResolver`, `IdempotencyFingerprintInput`,
 `IdempotencyFingerprintResolver`, `IdempotencyEvent`, `IdempotencyOutcome` and
@@ -72,8 +72,15 @@ The supported compiler baseline is TypeScript 5.7.3 with `strict: true` and
 `skipLibCheck: false`. CommonJS consumers are checked with `moduleResolution`
 `node` (module `CommonJS`), `node16` (module `Node16`) and `nodenext` (module
 `NodeNext`), with package type `commonjs`. The package still ships CommonJS only;
-ESM builds and bundler resolution are outside this validation scope. The final
-Node/Nest version matrix is tracked in [S8](docs/1.0.0/work-items/S8-release-validation.md).
+ESM builds and bundler resolution are outside this validation scope.
+
+The 1.0 support matrix is Node.js **22 or 24**, NestJS **10 or 11**, and the
+matching Express or Fastify adapter. Node 20 is no longer supported. CI and
+release validation run both real PostgreSQL 16 and Redis 7, reject skipped tests,
+and install the same tarball into isolated Memory/Redis/Postgres consumers.
+Optional driver lower bounds (`ioredis` 5.0.0, `pg` and `@types/pg` 8.11.0) and
+representative versions are tested separately. Exact dependency pins, evidence
+and untested environments are recorded in [S8](docs/1.0.0/work-items/S8-release-validation.md).
 
 ## Quick start
 
@@ -867,7 +874,7 @@ Deferred to future versions:
 - v0.2 (shipped): PostgreSQL storage adapter (`pg`), opt-in sweep service, bundled SQL DDL
 - v0.3 (shipped): Stable JSON fingerprinting, safe response header replay, Fastify verification, real Redis smoke coverage, hardened release validation
 - v0.4 (shipped): Processing leases, custom key resolvers, custom fingerprint resolvers, observability events/status headers, draft-compatible documentation cleanup
-- v1.0 (unreleased): Response safety, identity isolation, optional-driver imports, storage/TTL and failure contracts, executable adoption and migration guidance. Final release matrix and gates remain [S8](docs/1.0.0/work-items/S8-release-validation.md).
+- v1.0 (unreleased): Response safety, identity isolation, optional-driver imports, storage/TTL and failure contracts, executable adoption and migration guidance. Release matrix, gates and validation evidence are tracked in [S8](docs/1.0.0/work-items/S8-release-validation.md).
 - Future candidates (not promised for 1.0): Transactional integration (`@TransactionalIdempotent`), business-error caching option, Swagger/OpenAPI integration, service-level idempotency helpers
 
 ## License

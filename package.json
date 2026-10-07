@@ -1,6 +1,6 @@
 {
   "name": "@nestarc/idempotency",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "HTTP idempotency for NestJS — decorator-based, pluggable storage (memory/Redis/Postgres), response replay and a documented draft-07 profile.",
   "license": "MIT",
   "author": "nestarc",
@@ -71,7 +71,12 @@
     "test:all": "jest",
     "prepublishOnly": "npm run clean && npm run lint && npm run test:all && npm run build",
     "test:consumers": "node scripts/consumer-package.mjs",
-    "test:adoption": "node scripts/adoption-examples.mjs"
+    "test:adoption": "node scripts/adoption-examples.mjs",
+    "release:build": "node scripts/release-validation.mjs build",
+    "release:validate": "node scripts/release-validation.mjs validate",
+    "release:verify": "node scripts/release-validation.mjs verify-artifact",
+    "release:matrix": "node scripts/release-validation.mjs verify-matrix",
+    "test:release-gates": "node --test test/release/*.test.mjs"
   },
   "peerDependencies": {
     "@nestjs/common": "^10.0.0 || ^11.0.0",
@@ -122,7 +127,7 @@
     "typescript": "^5.4.5"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^22.0.0 || ^24.0.0"
   },
   "publishConfig": {
     "access": "public"

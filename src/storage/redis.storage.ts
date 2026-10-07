@@ -1,6 +1,7 @@
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import type { Redis, RedisOptions } from 'ioredis';
+import type Redis from 'ioredis';
+import type { RedisOptions } from 'ioredis';
 
 import type {
   CompleteResponse,

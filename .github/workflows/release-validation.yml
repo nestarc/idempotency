@@ -1,0 +1,182 @@
+name: Release candidate validation
+
+# CI and release use this exact gate. The tarball is built once and every
+# matrix cell installs it. Only the aggregate gate can promote it for release.
+on:
+  workflow_call:
+    outputs:
+      artifact-name:
+        description: Candidate tarball, manifest, and complete matrix evidence
+        value: ${{ jobs.candidate.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build one candidate tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate commit
+        uses: actions/checkout@v4
+
+      - name: Setup build Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check gate failures, lint, type check, build, and record tarball
+        run: node scripts/release-validation.mjs build --output "$RUNNER_TEMP/candidate"
+
+      - name: Upload candidate for matrix validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: s8-candidate
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve build failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s8-build-failure
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: warn
+          retention-days: 14
+
+  matrix:
+    name: Node ${{ matrix.node }} / Nest ${{ matrix.nest }} / ${{ matrix.peer-profile }} peers
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+        nest: ['10', '11']
+        peer-profile: [representative, minimum]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: idempotency_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d idempotency_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://test:test@localhost:5432/idempotency_test
+      TEST_REDIS_URL: redis://localhost:6379
+      S5_REQUIRE_REAL_STORAGE: '1'
+      MATRIX_NEST: ${{ matrix.nest }}
+      MATRIX_PEER_PROFILE: ${{ matrix.peer-profile }}
+
+    steps:
+      - name: Checkout candidate commit
+        uses: actions/checkout@v4
+
+      - name: Setup matrix Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Download the original candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: s8-candidate
+          path: ${{ runner.temp }}/candidate
+
+      - name: Install locked development dependencies
+        run: npm ci
+
+      - name: Install the exact Nest and peer profile
+        run: node scripts/release-matrix.mjs install --nest "$MATRIX_NEST" --peer-profile "$MATRIX_PEER_PROFILE"
+
+      - name: Validate real storage, regressions, recipes, and tarball consumers
+        run: |
+          node scripts/release-validation.mjs validate \
+            --artifact "$RUNNER_TEMP/candidate/artifact.json" \
+            --expected-commit "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/validation-evidence" \
+            --nest "$MATRIX_NEST" \
+            --peer-profile "$MATRIX_PEER_PROFILE"
+
+      - name: Preserve matrix results, logs, consumer locks, and dependency lists
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s8-matrix-node${{ matrix.node }}-nest${{ matrix.nest }}-${{ matrix.peer-profile }}
+          path: |
+            ${{ runner.temp }}/validation-evidence/
+            !${{ runner.temp }}/validation-evidence/**/node_modules/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  candidate:
+    name: Verify all eight cells and preserve the validated candidate
+    needs: [build, matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact-name: s8-validated-candidate
+    steps:
+      - name: Checkout candidate commit
+        uses: actions/checkout@v4
+
+      - name: Setup verification Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download the original candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: s8-candidate
+          path: ${{ runner.temp }}/candidate
+
+      - name: Download all matrix evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: s8-matrix-*
+          path: ${{ runner.temp }}/candidate/evidence
+
+      - name: Verify candidate identity and complete matrix evidence
+        run: |
+          node scripts/release-validation.mjs verify-artifact \
+            --artifact "$RUNNER_TEMP/candidate/artifact.json" \
+            --expected-commit "$GITHUB_SHA"
+          node scripts/release-validation.mjs verify-matrix \
+            --artifact "$RUNNER_TEMP/candidate/artifact.json" \
+            --expected-commit "$GITHUB_SHA" \
+            --evidence "$RUNNER_TEMP/candidate/evidence"
+
+      - name: Promote the validated candidate for release
+        uses: actions/upload-artifact@v4
+        with:
+          name: s8-validated-candidate
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 14

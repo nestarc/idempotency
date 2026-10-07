@@ -14,7 +14,7 @@ import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import RedisMock from 'ioredis-mock';
-import type { Redis } from 'ioredis';
+import type Redis from 'ioredis';
 
 import { RedisStorage } from '../../src/storage/redis.storage';
 import { IdempotencyModule } from '../../src/idempotency.module';

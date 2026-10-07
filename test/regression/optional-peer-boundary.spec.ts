@@ -5,7 +5,7 @@
  * and retain the DatabaseError identity check in the lazy PG error path.
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
-import type { Redis } from 'ioredis';
+import type Redis from 'ioredis';
 import type { Pool } from 'pg';
 
 const missingModule = (name: string): Error =>

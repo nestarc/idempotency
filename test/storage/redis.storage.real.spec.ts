@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import Redis from 'ioredis';
 import { randomUUID } from 'crypto';
 
 import { RedisStorage } from '../../src/storage/redis.storage';

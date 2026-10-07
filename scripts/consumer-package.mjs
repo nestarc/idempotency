@@ -13,9 +13,10 @@ import {
   realpathSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { matrixVersions } from './release-matrix.mjs';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = join(repository, 'test/consumers');
@@ -23,6 +24,9 @@ const args = process.argv.slice(2);
 let tarball;
 let baseline = false;
 let skipServices = false;
+let nestMajor = '11';
+let peerProfile = 'representative';
+let requestedOutput;
 for (let i = 0; i < args.length; i += 1) {
   if (args[i] === '--tarball' || args[i] === '--baseline') {
     assert(!tarball, 'Choose only one of --tarball and --baseline');
@@ -31,22 +35,44 @@ for (let i = 0; i < args.length; i += 1) {
     tarball = resolve(args[++i]);
   } else if (args[i] === '--skip-services') {
     skipServices = true;
+  } else if (['--nest', '--peer-profile', '--output'].includes(args[i])) {
+    const flag = args[i];
+    assert(args[i + 1] && !args[i + 1].startsWith('--'), `${flag} value required`);
+    const value = args[++i];
+    if (flag === '--nest') nestMajor = value;
+    else if (flag === '--peer-profile') peerProfile = value;
+    else requestedOutput = value;
   } else if (args[i] === '--help') {
     console.log(
       'node scripts/consumer-package.mjs [--tarball file.tgz | --baseline file.tgz] [--skip-services]\n' +
+        '  [--nest 10|11] [--peer-profile representative|minimum] [--output /absolute/fresh/directory]\n' +
         'Default: build and pack this repository. Real Redis/Postgres URLs are required unless explicitly skipped.\n' +
-        'Artifacts and lockfiles are retained under /private/tmp/idempotency-consumers-*.',
+        'Default matrix: Nest 11, representative optional peers. Output must be outside the checkout.\n' +
+        'Artifacts and lockfiles default to /private/tmp/idempotency-consumers-* (or /tmp on Linux).',
     );
     process.exit(0);
   } else {
     throw new Error(`Unknown argument: ${args[i]}`);
   }
 }
+const versions = matrixVersions(nestMajor, peerProfile);
 
 // /private/tmp (or /tmp on Linux) is outside the source checkout. Every ancestor
 // is checked below, including /node_modules; Node global paths are also disabled.
 const temporaryRoot = existsSync('/private/tmp') ? '/private/tmp' : '/tmp';
-const output = realpathSync(mkdtempSync(join(temporaryRoot, 'idempotency-consumers-')));
+let output;
+if (requestedOutput) {
+  assert(isAbsolute(requestedOutput), '--output must be an absolute path');
+  requestedOutput = resolve(requestedOutput);
+  assert(!existsSync(requestedOutput), '--output must be a fresh directory');
+  // Resolve the parent first so a symlink cannot move execution into the checkout.
+  const candidate = join(realpathSync(dirname(requestedOutput)), basename(requestedOutput));
+  checkAncestors(candidate);
+  mkdirSync(candidate);
+  output = realpathSync(candidate);
+} else {
+  output = realpathSync(mkdtempSync(join(temporaryRoot, 'idempotency-consumers-')));
+}
 const env = { ...process.env };
 delete env.NODE_PATH;
 delete env.NODE_OPTIONS;
@@ -60,6 +86,10 @@ const summary = {
   node: process.version,
   platform: `${process.platform}/${process.arch}`,
   typescript: '5.7.3',
+  nestMajor,
+  peerProfile,
+  versions,
+  consumers: {},
   moduleResolution: ['node', 'node16', 'nodenext'],
   services: {
     explicitlySkipped: skipServices,
@@ -147,6 +177,15 @@ function assertTree(variant, directory, phase) {
     }
   }
   visit(tree);
+  const installedVersions = Object.fromEntries(
+    Object.entries(tree.dependencies ?? {}).map(([name, dependency]) => [name, dependency.version]),
+  );
+  for (const [name, expected] of Object.entries(versions)) {
+    if (Object.hasOwn(installedVersions, name)) {
+      assert.equal(installedVersions[name], expected, `${variant}: ${name} matrix version drift`);
+    }
+  }
+  summary.consumers[variant] = { installedVersions };
   for (const name of variant === 'memory'
     ? ['pg', 'ioredis', '@types/pg']
     : variant === 'redis'
@@ -305,6 +344,11 @@ try {
       cpSync(join(fixtures, variant), directory, { recursive: true });
       const packagePath = join(directory, 'package.json');
       const manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
+      for (const section of ['dependencies', 'devDependencies']) {
+        for (const name of Object.keys(manifest[section] ?? {})) {
+          if (Object.hasOwn(versions, name)) manifest[section][name] = versions[name];
+        }
+      }
       manifest.dependencies['@nestarc/idempotency'] = `file:${tarball}`;
       writeFileSync(packagePath, JSON.stringify(manifest, null, 2) + '\n');
       install(variant, directory, variant === 'postgres' ? 'without-pg-types' : 'initial');
@@ -353,7 +397,7 @@ try {
           join(directory, 'package-lock.without-pg-types.json'),
         );
         cpSync(packagePath, join(directory, 'package.without-pg-types.json'));
-        manifest.devDependencies['@types/pg'] = '8.20.0';
+        manifest.devDependencies['@types/pg'] = versions['@types/pg'];
         writeFileSync(packagePath, JSON.stringify(manifest, null, 2) + '\n');
         install(variant, directory, 'with-pg-types');
         compile(
@@ -388,6 +432,20 @@ try {
           ['--no-global-search-paths', 'runtime.cjs'],
           directory,
         );
+        if (variant === 'memory') {
+          for (const adapter of ['express', 'fastify']) {
+            execute(
+              `memory-${adapter}-http`,
+              process.execPath,
+              [
+                '--no-global-search-paths',
+                '-e',
+                `require('./compiled/http-adapters').runHttpAdapter('${adapter}').catch(error => { console.error(error); process.exitCode = 1; })`,
+              ],
+              directory,
+            );
+          }
+        }
         if (skipServices && variant !== 'memory')
           record(`${variant}-real-service-smoke`, 'skip', { reason: 'Explicit --skip-services' });
         else record(`${variant}-storage-smoke`, 'pass');

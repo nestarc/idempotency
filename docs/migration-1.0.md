@@ -265,3 +265,11 @@ uncertain writes. These checks support the procedure; rehearse the actual
 application's two artifacts, ingress fencing, backups and provider recovery
 before a production cutover. See [S7](1.0.0/work-items/S7-adoption-docs.md) for
 the executed environment/results and S8 for final artifact/matrix validation.
+
+## Runtime support for 1.0
+
+Use Node.js 22 or 24 with NestJS 10 or 11 and its matching Express/Fastify adapter.
+The package engines now exclude Node 20 and unvalidated odd/future major versions.
+Upgrade the runtime before adopting 1.0; rolling back to 0.4 does not require
+downgrading Node. The release gate checks PostgreSQL 16, Redis 7 and the optional
+driver lower bounds as well as representative pins. See [D08](1.0.0/decisions.md#d08--출시-matrix와-동일-artifact-decided).
