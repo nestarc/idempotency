@@ -12,11 +12,12 @@
 - [ ] Documentation only
 - [ ] CI / chore
 
-## IETF / correctness impact
+## Correctness / supported profile impact
 
-<!-- Does this change touch the draft-ietf-httpapi-idempotency-key-header
-     behavior? If yes, which section (error codes, replay, fingerprint,
-     scope, token CAS, TTL) and how is the new behavior spec-aligned? -->
+<!-- Describe any change to replay, fingerprinting, identity/scope, token CAS,
+     TTL, failure recovery or observability. Compare HTTP behavior with the
+     documented draft-07 profile in README.md, including its differences from
+     the draft; this package does not claim full draft or RFC conformance. -->
 
 ## Storage contract impact
 
@@ -24,23 +25,32 @@
 - [ ] Additive change (new optional method/field)
 - [ ] Breaking change (new method, renamed field, semantic change)
 
-<!-- If anything in this section is not "No change", the shared contract
-     test at `test/support/shared-storage-contract.ts` and both the
-     `MemoryStorage` and `RedisStorage` adapters must be updated in the
-     same PR. -->
+<!-- For storage contract or adapter behavior changes, update
+     `test/support/shared-storage-contract.ts` and verify `MemoryStorage`,
+     `RedisStorage` and `PostgresStorage`; update each affected adapter. -->
 
 ## Tests
 
-- [ ] Unit tests added / updated
-- [ ] E2E tests added / updated
-- [ ] Regression test added for a bug fix
-- [ ] `npm run test:all` passes locally
-- [ ] `npm run lint` passes locally
-- [ ] `npm run build` passes locally
+<!-- Check applicable items and record commands/results or explain omissions.
+     Documentation and metadata-only changes need only relevant validation. -->
+
+- [ ] Relevant unit / E2E tests added or updated
+- [ ] Regression test added under `test/regression/` for a runtime bug fix
+- [ ] `npm run lint`, `npm run test:all` and `npm run build` pass
+- [ ] Storage checks use real Redis and PostgreSQL with both test service URLs set
+- [ ] Package exports / optional peers / declarations verified with `npm run test:consumers`
+- [ ] Release candidate passes the shared validation matrix with zero skips/todos and consumers using the same tarball
+
+<!-- Validation evidence and limitations: Default Jest can skip real services
+     without TEST_REDIS_URL / TEST_DATABASE_URL. See CONTRIBUTING.md for the
+     explicit release gates; a passing default test command is insufficient
+     evidence for a release. -->
 
 ## Checklist
 
-- [ ] Updated `CHANGELOG.md` (new entry under `[Unreleased]`)
-- [ ] Updated `README.md` if public API or options changed
+<!-- Check only the items relevant to this change. -->
+
+- [ ] Updated `CHANGELOG.md` under `[Unreleased]` for user-facing changes
+- [ ] Updated public API / configuration / migration documentation as needed
 - [ ] Added JSDoc on new public exports
-- [ ] Bumped `package.json` version if this PR lands a release
+- [ ] For a release, `package.json`, `package-lock.json` and the CHANGELOG release version agree

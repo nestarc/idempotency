@@ -1,16 +1,14 @@
 # Dependabot configuration for @nestarc/idempotency.
 #
-# Two ecosystems are watched:
-#   1. npm           — devDependencies and peer-ranged packages. Grouped
-#                      by domain so a single PR updates all NestJS/@types
-#                      packages together instead of opening 10+ PRs.
-#   2. github-actions— action versions in .github/workflows/*. These
-#                      rarely change but a stale @v3 action can silently
-#                      break a deprecation deadline.
+# Root npm dependencies and GitHub Actions are watched. The exact versions in
+# scripts/release-matrix.mjs and test/consumers/* are maintained together manually:
+# they define the supported Nest majors and representative/minimum peer profiles.
+# Do not add the consumer fixtures as automatic update directories or raise the
+# minimum profile without explicitly revising the compatibility contract.
 #
 # Schedule is weekly (Monday morning Seoul time) so PRs don't overwhelm
 # the author. Minor/patch updates are grouped; major bumps open their
-# own PRs so breaking changes surface individually.
+# own PRs unless they would change supported peer majors (see ignore below).
 
 version: 2
 updates:
@@ -22,6 +20,8 @@ updates:
       time: '09:00'
       timezone: Asia/Seoul
     open-pull-requests-limit: 5
+    # Keep existing lower bounds when the current range already permits an update.
+    versioning-strategy: increase-if-necessary
     labels:
       - dependencies
       - npm
@@ -32,30 +32,45 @@ updates:
       nestjs:
         patterns:
           - '@nestjs/*'
+        update-types: [minor, patch]
       types:
         patterns:
           - '@types/*'
+        exclude-patterns:
+          - '@types/jest'
+          - '@types/pg'
+        update-types: [minor, patch]
       eslint-and-prettier:
         patterns:
           - 'eslint*'
           - '@typescript-eslint/*'
           - 'prettier*'
+        update-types: [minor, patch]
       jest:
         patterns:
           - 'jest'
           - 'ts-jest'
           - '@types/jest'
+        update-types: [minor, patch]
+      postgres:
+        patterns:
+          - 'pg'
+          - '@types/pg'
+        update-types: [minor, patch]
     ignore:
-      # Never bump these automatically — they are peer-declared and the
-      # supported ranges are intentional.
-      - dependency-name: '@nestjs/common'
+      # Support changes require matching peer ranges and release-matrix coverage.
+      # Keep Nest core, HTTP adapters, and testing on the same supported major.
+      - dependency-name: '@nestjs/*'
         update-types: ['version-update:semver-major']
-      - dependency-name: '@nestjs/core'
+      - dependency-name: 'pg'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/pg'
         update-types: ['version-update:semver-major']
       - dependency-name: 'rxjs'
         update-types: ['version-update:semver-major']
       - dependency-name: 'reflect-metadata'
-        update-types: ['version-update:semver-major']
+        # 0.x minor releases can also leave the declared ^0.1 / ^0.2 ranges.
+        versions: ['>=0.3.0']
       - dependency-name: 'ioredis'
         update-types: ['version-update:semver-major']
 

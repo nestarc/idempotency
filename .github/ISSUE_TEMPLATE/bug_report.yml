@@ -5,30 +5,39 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug report! Before you submit,
-        please verify that the issue is not fingerprint-based or a stale
-        install. The most common false alarms are:
-          - Client is sending a different body each retry (fingerprint mismatch → 422)
-          - Key reused across endpoints with `scope: 'global'` (by design)
-          - Dev server restart wiped MemoryStorage state (use RedisStorage in prod)
+        Include exact installed versions and the request/retry sequence so we
+        can reproduce the behavior. The supported matrix is Node.js 22/24,
+        NestJS 10/11, and Express/Fastify. Reports from other environments are
+        welcome; identify those versions in the environment field below.
+        Use synthetic examples and remove credentials, connection strings,
+        real idempotency keys, identities and sensitive request/response data.
 
   - type: input
     id: version
     attributes:
       label: Package version
       description: What version of `@nestarc/idempotency` are you using?
-      placeholder: 0.1.3
+      placeholder: 1.0.0
     validations:
       required: true
 
-  - type: dropdown
-    id: nest-version
+  - type: textarea
+    id: environment
     attributes:
-      label: NestJS version
-      options:
-        - '11.x'
-        - '10.x'
-        - Other (please specify in reproduction)
+      label: Environment and exact versions
+      description: |
+        Include Node.js, npm, NestJS core/common, HTTP adapter and its version.
+        For Redis/Postgres, include driver and server versions. Include OS and
+        deployment details such as process/replica count if relevant.
+      placeholder: |
+        Node.js:
+        npm:
+        @nestjs/common / @nestjs/core:
+        @nestjs/platform-express or @nestjs/platform-fastify:
+        express or fastify:
+        ioredis / pg (if used):
+        Redis / PostgreSQL server (if used):
+        OS / deployment:
     validations:
       required: true
 
@@ -39,6 +48,7 @@ body:
       options:
         - MemoryStorage
         - RedisStorage
+        - PostgresStorage
         - Custom adapter
     validations:
       required: true
@@ -60,7 +70,10 @@ body:
       label: Minimal reproduction
       description: |
         A minimal code snippet or link to a repo that reproduces the issue.
-        The smaller the better — ideally a single controller + forRoot call.
+        Include a controller, module configuration (forRoot/forRootAsync),
+        request/retry sequence, status codes and relevant response headers.
+        For fingerprint or scope issues, use synthetic inputs that preserve
+        the differences between requests. Note custom resolvers and TTLs.
       render: typescript
     validations:
       required: true
@@ -69,7 +82,10 @@ body:
     id: logs
     attributes:
       label: Relevant logs
-      description: Any warnings or errors from the `IdempotencyInterceptor` Logger.
+      description: |
+        Include relevant diagnostic codes, outcomes, warnings and errors.
+        Redact secrets and sensitive data from application/driver logs too;
+        do not include real keys, credentials or connection strings.
       render: shell
 
   - type: checkboxes
@@ -78,8 +94,4 @@ body:
       label: Pre-flight checks
       options:
         - label: I searched existing issues and did not find a duplicate.
-          required: true
-        - label: I verified the bug is not a fingerprint mismatch on a retried request with a different body.
-          required: true
-        - label: I am using a supported NestJS version (10.x or 11.x).
           required: true
