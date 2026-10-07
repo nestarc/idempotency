@@ -7,11 +7,15 @@ import type {
   MutateResult,
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
+import { assertTtlSeconds } from '../utils/ttl';
 
 interface Entry {
   record: IdempotencyRecord;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 }
+
+// Larger delays overflow Node's signed 32-bit timer range and fire after 1ms.
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /**
  * In-memory implementation of {@link IdempotencyStorage}.
@@ -34,6 +38,7 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
     fingerprint: string | undefined,
     ttlSeconds: number,
   ): Promise<CreateResult> {
+    assertTtlSeconds(ttlSeconds, 'MemoryStorage.create: ttlSeconds');
     if (this.getLiveEntry(key)) {
       return { acquired: false };
     }
@@ -47,10 +52,9 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
       createdAt: now,
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000),
     };
-    this.entries.set(key, {
-      record,
-      timer: this.scheduleEviction(key, ttlSeconds),
-    });
+    const entry: Entry = { record };
+    this.entries.set(key, entry);
+    this.scheduleEviction(key, entry);
     return { acquired: true, token };
   }
 
@@ -60,6 +64,7 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
     response: CompleteResponse,
     ttlSeconds: number,
   ): Promise<MutateResult> {
+    assertTtlSeconds(ttlSeconds, 'MemoryStorage.complete: ttlSeconds');
     const entry = this.getLiveEntry(key);
     // Missing record: the original was evicted (or never existed). This is
     // the TTL-race case — the caller's token points at a record that no
@@ -86,10 +91,9 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
       // is refreshed to the new TTL window.
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000),
     };
-    this.entries.set(key, {
-      record: updated,
-      timer: this.scheduleEviction(key, ttlSeconds),
-    });
+    const completedEntry: Entry = { record: updated };
+    this.entries.set(key, completedEntry);
+    this.scheduleEviction(key, completedEntry);
     return 'ok';
   }
 
@@ -137,13 +141,28 @@ export class MemoryStorage implements IdempotencyStorage, OnModuleDestroy {
     return entry;
   }
 
-  private scheduleEviction(key: string, ttlSeconds: number): NodeJS.Timeout {
-    const timer = setTimeout(() => {
-      this.entries.delete(key);
-    }, ttlSeconds * 1000);
+  private scheduleEviction(key: string, entry: Entry): void {
+    const remainingMs = entry.record.expiresAt.getTime() - Date.now();
+    const timer = setTimeout(
+      () => {
+        // Completion replaces the entry while preserving its token. Entry
+        // identity also protects that refreshed deadline from queued callbacks.
+        if (this.entries.get(key) !== entry) {
+          return;
+        }
+        if (entry.record.expiresAt.getTime() <= Date.now()) {
+          this.evict(key);
+          return;
+        }
+        // A long TTL or a backwards clock adjustment can outlive this chunk.
+        // Always schedule against the original logical deadline.
+        this.scheduleEviction(key, entry);
+      },
+      Math.min(MAX_TIMER_DELAY_MS, Math.max(1, remainingMs)),
+    );
     if (typeof timer.unref === 'function') {
       timer.unref();
     }
-    return timer;
+    entry.timer = timer;
   }
 }

@@ -136,7 +136,7 @@ legacy/corrupt COMPLETED도409이며 새 body는 opaque string이다. 키/schema
 
 - 마지막 갱신: 2026-10-07. S7 자체 구현·예제 검증 미착수. S1~S4의 README/CHANGELOG 계약 갱신은 위 인계 참조.
 - 다음 행동: README sweep 블록을 소비자 TestModule로 재현하고 필요한 provider와 실제 소유한 Pool이 같은지 확인한다.
-- 미결: D07 및 선행 D05·D06. D01·D02·D03·D04는 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
+- 미결: D07. 선행 D01~D06은 확정됐다. 아래 S5/S6 인계를 전환 예제와 함께 통합한다.
 - 인계 대상: S8에 실행 예제 목록, 공식 import/지원 구성, 업그레이드·롤백 테스트와 남은 제한을 전달한다.
 - 검증 기록: 대상 commit/artifact, 환경, 명령, pass/fail/skip, 증거와 남은 제한을 실행 후 기록한다.
 
@@ -171,4 +171,14 @@ adapter 계측/저장소 조사를 소비자 쪽에서 마련하며, 원장 조�
 
 실행 fixture와 검증 한계는 [S5](S5-failure-lifecycle.md)를 따른다. 다음 S7 작업은 실제
 소비자 application의 command 원장/provider 연동 및 업그레이드·rollback recipe를
-검증하고 D07에 남은 S6 TTL 범위/최종 adapter 증거를 통합하는 것이다.
+검증하고 D07에 아래 S6 TTL 범위/최종 adapter 증거를 통합하는 것이다.
+
+### S6 저장소·TTL 인수인계 (2026-10-07)
+
+[D06](../decisions.md#d06--저장소-공통-계약-decided)과 [S6 최종 기록](S6-storage-contract.md#2026-10-07-s6-최종-검증-증거)으로 긴 TTL·직접 입력까지 완료했다.
+`ttl`·`processingTtl`과 adapter create/complete는 정수 1~2,147,483,647초이며 30일도 지원한다.
+잘못된 TTL은 lookup·NX/CAS·만료 정리 전에 RangeError다. interceptor는 요청 시점 설정 오류(기본500)로 처리하며 client400으로 안내하지 않는다.
+직접 호출도 missing/stale/완료 여부와 관계없이 같은 오류를 내므로 custom adapter는 범위와 검증 순서를 반영해야 한다.
+Memory는 deadline 기반 분할 timer를 쓰며 옛 callback은 완료·교체된 레코드를 바꾸지 않는다. 공개 method/상태/key/schema 변경은 없다.
+README/CHANGELOG와 공개 타입 주석을 갱신했다. S7에서는 예제의 값, 0.4의 상한 초과 설정·잘못된 직접 호출 전환, custom adapter의 complete-once/만료 계약을 함께 설명한다.
+실제 Redis/PG 포함 전체908 pass/0 skip은 대표 환경 증거이며 S7 예제 또는 S8 최종 matrix 완료를 뜻하지 않는다.

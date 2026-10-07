@@ -68,12 +68,17 @@ export type MutateResult = 'ok' | 'stale';
  * 5. Complete once — only a live PROCESSING record may become COMPLETED.
  *    Repeated/concurrent complete with the same token returns stale after
  *    the first success, preserving its response and retention deadline.
+ * 6. TTL validation — create/complete accept integer seconds from 1 through
+ *    2_147_483_647 inclusive (including 30-day TTLs). Reject all other values
+ *    with RangeError before any storage access or mutation, even for missing,
+ *    expired, already completed, or differently owned records. This applies
+ *    to direct adapter calls as well as calls through the interceptor.
  *
  * ### Lifecycle
  *
  * Storage adapters that hold external resources (Redis clients, DB
  * connections, timers) SHOULD implement Nest's `OnModuleDestroy` hook so
- * the resources are released when the host application shuts down. Both
+ * the resources are released when the host application shuts down. All
  * built-in adapters (`MemoryStorage`, `RedisStorage`, `PostgresStorage`) do this — a custom
  * adapter is free to opt in the same way.
  *
@@ -95,7 +100,8 @@ export interface IdempotencyStorage {
    * @param key the idempotency key from the client header (already scoped
    *            by the interceptor to include endpoint identity)
    * @param fingerprint SHA-256 of the request body, or undefined if fingerprinting is off
-   * @param ttlSeconds lifetime of the lock; the interceptor passes the resolved TTL
+   * @param ttlSeconds lifetime of the lock, an integer in [1, 2_147_483_647] seconds
+   * @throws RangeError if ttlSeconds is invalid, before NX or expiry checks
    */
   create(key: string, fingerprint: string | undefined, ttlSeconds: number): Promise<CreateResult>;
 
@@ -107,6 +113,8 @@ export interface IdempotencyStorage {
    * must not overwrite a response or refresh TTL.
    *
    * On `'ok'`, implementations must refresh the TTL to `ttlSeconds`.
+   * @param ttlSeconds completed record lifetime, an integer in [1, 2_147_483_647] seconds
+   * @throws RangeError if ttlSeconds is invalid, before ownership or state checks
    */
   complete(
     key: string,

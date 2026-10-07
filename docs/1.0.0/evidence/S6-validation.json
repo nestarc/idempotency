@@ -1,0 +1,398 @@
+{
+  "date": "2026-10-07",
+  "timezone": "Asia/Seoul",
+  "target": {
+    "baseCommit": "20740605bcafaa67764d55fdee2f638289e55afc",
+    "state": "S6 working tree; no version bump, commit or publication",
+    "sourceSha256": {
+      "jest.config.ts": "76a2bed5a344d8697d8f8ccbcdd224fb2bbb4519c803cefcca84cfcb3f045f5e",
+      "package-lock.json": "374a6acfdddc388259b5efc7759d547f0bf46ae4aa3411f2b5c9e7c32880bc33",
+      "package.json": "f4e29825b6a4db2185fed0a9669003d484ae829a4cd235f4c47e2d15dc3979b3",
+      "src/idempotency.interceptor.ts": "46a9b47137dfedb9a694f2d99f4299dc04251392430db173f40cf75855d72897",
+      "src/interfaces/idempotency-options.interface.ts": "da6fcc090c51677cae821993748448d1f3d9dd2e517b1e1590230ae252a94d96",
+      "src/interfaces/idempotency-storage.interface.ts": "79482d63e0a493696b329b7eed8f0ee0118e5d8141e409dcaa0ae03172826ba3",
+      "src/storage/memory.storage.ts": "31f142f9b235063d8bcd84a27d2548a5807059761967810dc377bcf58a8844ad",
+      "src/storage/postgres.storage.ts": "fb83507e180f955efab861b36bcd6a3bc1cb2d357e2157acd4b43d422b9fe545",
+      "src/storage/redis.storage.ts": "e9edf8eb64b9bffc0684a0bd12947931071e5295194b3efb957d49c2b85bc15b",
+      "src/utils/ttl.ts": "760f2e61110f2d17cd3b22d3c1449670e6e5fbb092a3fa1262e256e43895082e",
+      "test/regression/memory-long-ttl.spec.ts": "bab586cdb39d5a9907cdafbd99db8ff312f5d19bb410940d6a35e17d75a9d217",
+      "test/regression/storage-ttl-validation.spec.ts": "c2c48ba883aaa8cdafed4c0d7ca17acfef52f2b2ac46ad0ed9e78f3b7d8bb44f",
+      "test/regression/ttl-validation.spec.ts": "dbd4d9ede4e8fbf2f704f7ce84e2276b5e5688be0320225e052602e94ef4f8aa",
+      "test/storage/redis.storage.real.spec.ts": "e92ad406d341d215c4e66a3e4f24020437e02a141aa23f7d2d98b5149d0463a9",
+      "test/support/shared-storage-contract.ts": "79fc651631f0b763303e2cc3c4f9f3e80ae6a03c1a58e60a7129a040b328c7fe"
+    }
+  },
+  "environment": {
+    "node": "v24.11.1",
+    "npm": "11.6.2",
+    "nest": "11.1.18",
+    "redis": "7.2.7",
+    "postgres": "16.14",
+    "platform": "darwin/arm64",
+    "redisUrl": "redis://127.0.0.1:16383",
+    "databaseUrl": "postgresql://test@127.0.0.1:15436/idempotency_test",
+    "dependencyInstall": "Reused existing package-lock installation; no dependency changes",
+    "services": "Dedicated S6 instances stopped after verification"
+  },
+  "policy": {
+    "ttlSeconds": {
+      "minimum": 1,
+      "maximum": 2147483647,
+      "integer": true
+    },
+    "invalid": "RangeError before all storage access, state checks or mutation",
+    "nativeTimerMaxMilliseconds": 2147483647
+  },
+  "red": [
+    {
+      "scope": "interceptor range and RangeError",
+      "failed": 16,
+      "passed": 14,
+      "log": "/private/tmp/s6-interceptor-red.log"
+    },
+    {
+      "scope": "Redis/PG direct TTL=0 before I/O",
+      "failed": 4,
+      "passed": 0
+    },
+    {
+      "scope": "Memory long TTL/deadline/native overflow",
+      "failed": 8,
+      "passed": 6
+    }
+  ],
+  "checks": [
+    {
+      "command": "npm run lint",
+      "result": "pass",
+      "log": "/private/tmp/s6-lint.log"
+    },
+    {
+      "command": "npx tsc --noEmit -p tsconfig.json",
+      "result": "pass",
+      "log": "/private/tmp/s6-typecheck.log"
+    },
+    {
+      "command": "npm run build",
+      "result": "pass",
+      "log": "/private/tmp/s6-build.log"
+    },
+    {
+      "command": "TEST_REDIS_URL=redis://127.0.0.1:16383 TEST_DATABASE_URL=postgresql://test@127.0.0.1:15436/idempotency_test npm test -- --runInBand test/storage test/regression/ttl-validation.spec.ts test/regression/storage-ttl-validation.spec.ts test/regression/memory-long-ttl.spec.ts test/regression/storage-lifecycle-contract.spec.ts test/regression/postgres-adapter.spec.ts",
+      "result": "pass",
+      "suites": 11,
+      "tests": {
+        "passed": 294
+      },
+      "log": "/private/tmp/s6-targeted.log"
+    },
+    {
+      "command": "TEST_REDIS_URL=redis://127.0.0.1:16383 TEST_DATABASE_URL=postgresql://test@127.0.0.1:15436/idempotency_test S5_REQUIRE_REAL_STORAGE=1 npm run test:all -- --runInBand --json --outputFile=/private/tmp/s6-test-all.json",
+      "result": "pass",
+      "suites": 38,
+      "passed": 908,
+      "failed": 0,
+      "skipped": 0,
+      "todo": 0,
+      "log": "/private/tmp/s6-test-all.log",
+      "suitesSummary": [
+        {
+          "file": "test/e2e/request-isolation.e2e-spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 58
+          }
+        },
+        {
+          "file": "test/regression/response-replay-http.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 28
+          }
+        },
+        {
+          "file": "test/e2e/fastify.e2e-spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 5
+          }
+        },
+        {
+          "file": "test/e2e/postgres.e2e-spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "test/e2e/idempotency.e2e-spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 11
+          }
+        },
+        {
+          "file": "test/regression/optional-peer-boundary.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 9
+          }
+        },
+        {
+          "file": "test/idempotency.interceptor.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 61
+          }
+        },
+        {
+          "file": "test/regression/observability-headers-sweep.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 9
+          }
+        },
+        {
+          "file": "test/regression/response-replay-boundary.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 9
+          }
+        },
+        {
+          "file": "test/storage/redis.storage.real.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 51
+          }
+        },
+        {
+          "file": "test/regression/observability-safety.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 65
+          }
+        },
+        {
+          "file": "test/regression/request-key-validation.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 165
+          }
+        },
+        {
+          "file": "test/regression/ttl-validation.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 30
+          }
+        },
+        {
+          "file": "test/regression/path-based-scope.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 2
+          }
+        },
+        {
+          "file": "test/idempotency.module.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 6
+          }
+        },
+        {
+          "file": "test/utils/request-key.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "test/regression/memory-long-ttl.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 14
+          }
+        },
+        {
+          "file": "test/regression/race-completed-winner.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 4
+          }
+        },
+        {
+          "file": "test/storage/postgres.storage.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 53
+          }
+        },
+        {
+          "file": "test/regression/request-isolation.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 27
+          }
+        },
+        {
+          "file": "test/services/postgres-sweep.service.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 4
+          }
+        },
+        {
+          "file": "test/regression/complete-failure-cascade.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 1
+          }
+        },
+        {
+          "file": "test/storage/redis.storage.lifecycle.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "test/idempotency.decorator.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 4
+          }
+        },
+        {
+          "file": "test/regression/failure-lifecycle.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 17
+          }
+        },
+        {
+          "file": "test/storage/redis.storage.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 61
+          }
+        },
+        {
+          "file": "test/regression/storage-lifecycle-contract.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 14
+          }
+        },
+        {
+          "file": "test/regression/response-capture-failure.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 12
+          }
+        },
+        {
+          "file": "test/storage/postgres.storage.lifecycle.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 2
+          }
+        },
+        {
+          "file": "test/regression/response-completion.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 6
+          }
+        },
+        {
+          "file": "test/regression/postgres-adapter.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 2
+          }
+        },
+        {
+          "file": "test/regression/replay-body-format.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 50
+          }
+        },
+        {
+          "file": "test/storage/memory.storage.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 59
+          }
+        },
+        {
+          "file": "test/utils/response-headers.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 14
+          }
+        },
+        {
+          "file": "test/utils/stable-json.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 23
+          }
+        },
+        {
+          "file": "test/regression/storage-ttl-validation.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 5
+          }
+        },
+        {
+          "file": "test/utils/request-scope.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 8
+          }
+        },
+        {
+          "file": "test/regression/failure-lifecycle.real.spec.ts",
+          "status": "passed",
+          "tests": {
+            "passed": 10
+          }
+        }
+      ]
+    },
+    {
+      "command": "TEST_REDIS_URL=redis://127.0.0.1:16383 TEST_DATABASE_URL=postgresql://test@127.0.0.1:15436/idempotency_test npm run test:consumers",
+      "result": "pass",
+      "checks": {
+        "pass": 41,
+        "expected-failure": 3
+      },
+      "skipped": 0,
+      "tarball": "/private/tmp/idempotency-consumers-RUPpTd/nestarc-idempotency-0.4.0.tgz",
+      "sha256": "5d259a8066ebe1c529b0233af6771b5f1af3fa6185125637fcb05024976f94ca",
+      "summary": "/private/tmp/idempotency-consumers-RUPpTd/summary.json",
+      "log": "/private/tmp/s6-consumers.log",
+      "services": {
+        "explicitlySkipped": false,
+        "redisUrlProvided": true,
+        "databaseUrlProvided": true
+      }
+    },
+    {
+      "command": "Independent code/test diff review",
+      "result": "No actionable findings"
+    }
+  ],
+  "limitations": [
+    "Representative Node24/Nest11 environment only; final supported Node/Nest matrix and required skip gates remain S8 work.",
+    "Long TTL native tests inspect deadline/timer range/unref/no-overflow and bounded survival. Full elapsed lifetime uses fake timers; real Redis/PG verify configured retention, not actual 30-day or 68-year elapsed time.",
+    "Metadata tolerance is 1 second; distributed client/server clock synchronization is not guaranteed.",
+    "Storage CAS does not cancel business work or atomically commit with a business database.",
+    "Local service/HTTP connections and consumer installs required sandbox escalation.",
+    "S7 adoption recipes and S8 release validation are not completed by this evidence."
+  ]
+}

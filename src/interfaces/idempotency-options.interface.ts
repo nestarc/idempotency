@@ -112,6 +112,8 @@ export interface IdempotencyOptions {
    * Per-handler `@Idempotent({ ttl })` overrides this.
    * Completed replay records use this TTL. In-flight PROCESSING records also
    * use this TTL unless {@link processingTtl} is configured.
+   * Must be an integer from 1 through 2_147_483_647; otherwise a RangeError
+   * is emitted at request time before storage or handler execution.
    *
    * @default 86400 (24 hours)
    */
@@ -121,6 +123,7 @@ export interface IdempotencyOptions {
    * Optional time-to-live for in-flight PROCESSING records, in seconds.
    * When omitted, {@link ttl} is used for both processing locks and completed
    * replay records. Per-handler `@Idempotent({ processingTtl })` overrides this.
+   * Must be an integer from 1 through 2_147_483_647, like {@link ttl}.
    *
    * Configure this only when you want stuck in-flight records to expire sooner
    * than completed replay records. Values shorter than the endpoint's real
@@ -234,11 +237,13 @@ export interface IdempotentOptions {
 
   /**
    * Override the module-level TTL for this handler (in seconds).
+   * Must be an integer from 1 through 2_147_483_647.
    */
   ttl?: number;
 
   /**
    * Override the module-level processing TTL for this handler (in seconds).
+   * Must be an integer from 1 through 2_147_483_647.
    */
   processingTtl?: number;
 

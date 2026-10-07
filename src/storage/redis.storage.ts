@@ -10,6 +10,7 @@ import type {
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
 import { isMissingPeer } from '../utils/optional-peer';
+import { assertTtlSeconds } from '../utils/ttl';
 
 /**
  * Constructor options for {@link RedisStorage}.
@@ -136,6 +137,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
     fingerprint: string | undefined,
     ttlSeconds: number,
   ): Promise<CreateResult> {
+    assertTtlSeconds(ttlSeconds, 'RedisStorage.create: ttlSeconds');
     const token = randomUUID();
     const now = new Date();
     const payload: SerializedPayload = {
@@ -162,6 +164,7 @@ export class RedisStorage implements IdempotencyStorage, OnModuleDestroy {
     response: CompleteResponse,
     ttlSeconds: number,
   ): Promise<MutateResult> {
+    assertTtlSeconds(ttlSeconds, 'RedisStorage.complete: ttlSeconds');
     // Need the existing createdAt to preserve it. HGET is a separate round
     // trip but the Lua CAS still guarantees we only overwrite our own record.
     const hash = await this.client.hgetall(this.prefixedKey(key));

@@ -2,7 +2,7 @@
 
 이 문서는 `@nestarc/idempotency` 1.0.0 개발을 이어갈 때의 시작점이다. [조사 문서](../1.0.0-stabilization-research.md)는 발견 당시의 근거를 보존하고, 이 작업판과 작업별 문서는 구현 상태와 다음 행동을 관리한다.
 
-작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1~S5 완료, S6 수명 계약 구현·검증 완료 및 긴 TTL/입력 정책 진행 중, S7·S8은 미착수다.** 아직 릴리스하지 않았다. 실제 DB/지원 버전 전체 검증은 S8에 남아 있다.
+작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1~S6 완료, S7·S8은 미착수다.** 아직 릴리스하지 않았다. 최종 지원 버전 전체 검증과 출시 gate는 S8에 남아 있다.
 
 ## 문서 사용 순서
 
@@ -32,7 +32,7 @@
 | S3 | [요청 격리와 키 계약](work-items/S3-request-isolation.md) | DONE | Codex | 없음 | D03 확정, 605 pass/0 skip·tarball 소비자 검증. S4 namespace 및 S7/D07 전환 조건 인계 완료 |
 | S4 | [관측 정보 보호](work-items/S4-observability.md) | DONE | Codex | S3의 namespace, S5의 실패 경로 | S5/D05 최종 오류·취소 경로 및 기존 payload/callback 회귀 통과, S4-4 완료 |
 | S5 | [장애와 요청 수명주기](work-items/S5-failure-lifecycle.md) | DONE | Codex | S1의 응답 완료 경계, S6의 만료/token 수명 계약 | D05/D06 수명 계약, 실제 crash10개 포함768 pass/0 skip, 운영 조정 가이드·S7/S8 인계 완료 |
-| S6 | [저장소 공통 계약](work-items/S6-storage-contract.md) | IN_PROGRESS | Codex | 없음 | S5 선행 수명 계약·실DB 검증 완료. S6-5 긴 TTL overflow/직접 adapter 입력 정책 확정·구현 |
+| S6 | [저장소 공통 계약](work-items/S6-storage-contract.md) | DONE | Codex | 없음 | D06 긴 TTL·직접 호출 선행 검증 완료. 실제 Redis/PG 포함908 pass/0 skip, S7/S8 인계 |
 | S7 | [도입 예제와 전환 문서](work-items/S7-adoption-docs.md) | TODO | 미배정 | S1~S6의 확정 계약 | Postgres sweep 예제를 그대로 Nest TestModule로 재현 |
 | S8 | [출시 검증](work-items/S8-release-validation.md) | TODO | 미배정 | S1~S7 완료 | 현재 CI와 release의 실제 DB skip 경로 확인 |
 
@@ -72,12 +72,19 @@ npm run test:all -- --runInBand
 | 2026-10-07 | `e2b9cec` + S3 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | lint/type/build, 전체 테스트, 실제 tarball 소비자 | 605 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S3 기록](work-items/S3-request-isolation.md), D03 및 S2/S4/S7 인계; 최종 matrix는 S8 |
 | 2026-10-07 | `2fc43d7` + S4 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | prepublishOnly, 개발 타입 검사, 실제 tarball 소비자 | 681 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S4 기록](work-items/S4-observability.md), D04 및 S2/S5/S7/S8 인계; 당시 S5 최종 통합 미완료 |
 | 2026-10-07 | `e13b370` + S5 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | prepublishOnly, 개발 타입 검사, 실제 crash fixture, tarball 소비자 | 768 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S5 기록](work-items/S5-failure-lifecycle.md); S4 최종 통합, D06 수명 계약; S6-5/S8 잔여 |
+| 2026-10-07 | `2074060` + S6 작업 트리 | Node24.11.1 / Nest11.1.18 / Redis7.2.7 / PG16.14 | lint/type/build, 전체 테스트, 실제 tarball 소비자 | 908 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S6 기록](work-items/S6-storage-contract.md), D06 전체 완료; S7/S8 잔여 |
+
+S6 최신 증거: D06 TTL 1~2,147,483,647초와 Memory 분할 timer, 직접 호출 선행 검증 완료.
+실제 Redis7.2.7/PG16.14 포함 전체 **38 suites / 908 pass / 0 skip**, lint·타입·build 통과.
+실제 tarball 소비자 **41 pass / 기대된 실패3 / 0 skip**.
+[상세 기록](work-items/S6-storage-contract.md#2026-10-07-s6-최종-검증-증거)과
+[보존 JSON](evidence/S6-validation.json)을 따른다. 최종 지원 matrix·출시 gate는 S8에 남는다.
 
 S5 최신 증거: D05 오류/취소/crash 정책과 D06 수명 계약 통합, 전체 **768 pass / 0 skip**,
 실제 tarball 소비자 **41 pass / 기대된 실패3 / 0 skip**. [검증 JSON](evidence/S5-validation.json)과
 [crash 원시 기록](evidence/S5-crash-experiments.json)을 따른다. 실제 Redis/PG child SIGKILL10개,
 업무 원장·만료 전후 retry를 검증했다. network outage/서버 failover/HTTP disconnect 실험은 아니다.
-S4-4 및 S5 최종 관측 경로 완료 조건도 함께 닫았다. S6-5의 긴 TTL·직접 입력과 S8 전체 matrix는 남는다.
+S4-4 및 S5 최종 관측 경로 완료 조건도 함께 닫았다. 당시 남았던 S6-5는 위 S6 결과로 완료했고 S8 전체 matrix는 남는다.
 
 S4 기존 증거: S4 자체 구현의 전체681 pass/0 skip 및 소비자41 pass/기대된 실패3.
 [보존 JSON](evidence/S4-validation.json)은 당시의 S5 통합 전 기록이며, 후속 통합 결과는 위 S5를 따른다.
@@ -138,3 +145,4 @@ Express adapter11.1.18/Fastify adapter11.1.19, class-transformer0.5.1.
 | 2026-10-07 | S3 완료: identity+endpoint 합성, v1 tuple hash, 입력 검증, 양 adapter 인증·서명 replay 검증. D03 확정 및 별도 namespace/업무 중복 방지 전환 조건을 D07/S7에 인계. |
 | 2026-10-07 | S4 자체 구현·검증: D04 namespace/안전 오류/고정 로그, sync storage 오류 관측, 상태 헤더 replay 차단, 전체·소비자 검증과 후속 인계. S5 최종 통합 전까지 IN_PROGRESS 유지. |
 | 2026-10-07 | S5 완료: handler/capture 경계 분리, 취소·불명 쓰기·실제 child crash10개, 전체768 pass, 소비자 검증·운영 조정 문서. S4 최종 완료, S6 core 통합 및 S6-5 잔여 기록. |
+| 2026-10-07 | S6 완료: D06 TTL 범위·직접 호출 검증, Memory deadline 분할 timer, 실제 Redis/PG 공통 계약·전체908 pass/0 skip 및 tarball 소비자 검증. S7/S8 인계. |

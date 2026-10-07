@@ -21,6 +21,8 @@
  *  12. Expired records are logically absent without timer/sweep cleanup.
  *  13. Complete is an atomic, once-only PROCESSING -> COMPLETED transition.
  *  14. Replacement records are unchanged by an expired owner's completion/cleanup.
+ *  15. TTLs are safe integer seconds in [1, 2_147_483_647], including long TTLs.
+ *  16. Invalid TTLs reject with RangeError before reading or changing records.
  *
  * Plug a new adapter into the suite via `describeStorageContract('Name', factory)`
  * inside that adapter's spec file. Any behavioral drift between adapters will
@@ -70,6 +72,135 @@ export const describeStorageContract = (name: string, factory: StorageFactory): 
       expect(record!.status).toBe('PROCESSING');
       expect(record!.fingerprint).toBe('fp');
     });
+
+    it.each([
+      ['minimum', 1],
+      ['30 days', 30 * 24 * 60 * 60],
+      ['maximum', 2_147_483_647],
+    ] as const)('create and complete accept the %s TTL', async (_label, ttlSeconds) => {
+      const beforeCreate = Date.now();
+      const { token } = await storage.create('contract-ttl-range', 'fp', ttlSeconds);
+      const afterCreate = Date.now();
+      expect(token).toEqual(expect.any(String));
+      const original = await storage.get('contract-ttl-range');
+      expect(original).not.toBeNull();
+      const originalCreatedAt = original!.createdAt.getTime();
+      // PostgreSQL uses its server clock; allow 1 second of clock skew. Redis
+      // metadata uses the client clock and its server PTTL is tested separately.
+      expect(original!.expiresAt.getTime()).toBeGreaterThanOrEqual(
+        beforeCreate + ttlSeconds * 1000 - 1000,
+      );
+      expect(original!.expiresAt.getTime()).toBeLessThanOrEqual(
+        afterCreate + ttlSeconds * 1000 + 1000,
+      );
+
+      const beforeComplete = Date.now();
+      await expect(
+        storage.complete(
+          'contract-ttl-range',
+          token!,
+          { statusCode: 201, body: 'long' },
+          ttlSeconds,
+        ),
+      ).resolves.toBe('ok');
+      const afterComplete = Date.now();
+      const completed = await storage.get('contract-ttl-range');
+      expect(completed!.status).toBe('COMPLETED');
+      expect(completed!.responseBody).toBe('long');
+      expect(completed!.createdAt.getTime()).toBe(originalCreatedAt);
+      expect(completed!.expiresAt.getTime()).toBeGreaterThanOrEqual(
+        beforeComplete + ttlSeconds * 1000 - 1000,
+      );
+      expect(completed!.expiresAt.getTime()).toBeLessThanOrEqual(
+        afterComplete + ttlSeconds * 1000 + 1000,
+      );
+    });
+
+    const invalidTtls: Array<[string, unknown]> = [
+      ['zero', 0],
+      ['negative', -1],
+      ['fractional', 1.5],
+      ['NaN', Number.NaN],
+      ['positive infinity', Number.POSITIVE_INFINITY],
+      ['negative infinity', Number.NEGATIVE_INFINITY],
+      ['above maximum', 2_147_483_648],
+      ['unsafe integer', Number.MAX_SAFE_INTEGER + 1],
+      ['numeric string', '60'],
+      ['null', null],
+      ['undefined', undefined],
+      ['boolean', true],
+      ['object', {}],
+      ['object without a prototype', Object.create(null)],
+      [
+        'object with throwing toString',
+        {
+          toString: () => {
+            throw new Error('Invalid TTL must not invoke object coercion');
+          },
+        },
+      ],
+      [
+        'function with throwing toString',
+        Object.assign(() => undefined, {
+          toString: () => {
+            throw new Error('Invalid TTL must not invoke function coercion');
+          },
+        }),
+      ],
+    ];
+
+    it.each(invalidTtls)(
+      'create and complete reject %s TTL without mutation',
+      async (_label, ttl) => {
+        await expect(storage.create('contract-invalid-new', 'fp', ttl as number)).rejects.toThrow(
+          RangeError,
+        );
+        await expect(storage.get('contract-invalid-new')).resolves.toBeNull();
+
+        const { token } = await storage.create('contract-invalid-complete', 'fp', 60);
+        const before = structuredClone(await storage.get('contract-invalid-complete'));
+        await expect(
+          storage.complete(
+            'contract-invalid-complete',
+            token!,
+            { statusCode: 201, body: 'invalid', headers: { location: '/invalid' } },
+            ttl as number,
+          ),
+        ).rejects.toThrow(RangeError);
+        expect(await storage.get('contract-invalid-complete')).toEqual(before);
+      },
+    );
+
+    it.each(['missing', 'processing', 'wrong-token', 'completed', 'expired', 'replaced'] as const)(
+      'invalid TTL rejects before create/complete state checks for %s records',
+      async (state) => {
+        const key = 'contract-invalid-state';
+        let token = '00000000-0000-4000-8000-000000000000';
+        let before = null;
+        if (state !== 'missing') {
+          token = (await storage.create(key, 'fp', 60)).token!;
+          if (state === 'completed') {
+            await storage.complete(key, token, { statusCode: 201, body: 'first' }, 60);
+          }
+          if (state === 'expired' || state === 'replaced') {
+            await expire(key);
+          }
+          if (state === 'replaced') {
+            await storage.create(key, 'replacement', 60);
+          }
+          if (state === 'wrong-token') token = '00000000-0000-4000-8000-000000000000';
+          // Do not read an expired record before exercising invalid input:
+          // adapter get() may perform cleanup and conceal early state checks.
+          if (state !== 'expired') before = structuredClone(await storage.get(key));
+        }
+
+        await expect(storage.create(key, 'invalid', 0)).rejects.toThrow(RangeError);
+        await expect(
+          storage.complete(key, token, { statusCode: 500, body: 'invalid' }, 0),
+        ).rejects.toThrow(RangeError);
+        expect(await storage.get(key)).toEqual(before);
+      },
+    );
 
     it('a second create() on the same key returns acquired=false without clobbering', async () => {
       const first = await storage.create('contract-2', 'fpA', 60);

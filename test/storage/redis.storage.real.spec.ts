@@ -55,6 +55,40 @@ describeOrSkip('RedisStorage real Redis', () => {
     }
   });
 
+  it.each([30 * 24 * 60 * 60, 2_147_483_647])(
+    'keeps the server TTL for long create and complete windows (%s seconds)',
+    async (ttlSeconds) => {
+      const client = new Redis(REDIS_URL!);
+      const keyPrefix = `idempotency:long-ttl:${randomUUID()}:`;
+      const storage = new RedisStorage({ client, keyPrefix });
+      const key = `${keyPrefix}key`;
+      // A round trip may consume time, but cannot shorten a multi-day TTL to
+      // Node's timer range. Keep the same 1s tolerance as the shared contract.
+      const expectServerTtl = async () => {
+        const remaining = await client.pttl(key);
+        expect(remaining).toBeGreaterThanOrEqual(ttlSeconds * 1000 - 1000);
+        expect(remaining).toBeLessThanOrEqual(ttlSeconds * 1000);
+      };
+      try {
+        const { token } = await storage.create('key', 'fp', ttlSeconds);
+        await expectServerTtl();
+        await expect(
+          storage.complete('key', token!, { statusCode: 201, body: 'long retention' }, ttlSeconds),
+        ).resolves.toBe('ok');
+        await expectServerTtl();
+        const beforeInvalid = await client.pttl(key);
+        await expect(
+          storage.complete('key', token!, { statusCode: 500 }, 2_147_483_648),
+        ).rejects.toThrow(RangeError);
+        expect(await client.pttl(key)).toBeLessThanOrEqual(beforeInvalid);
+        expect((await storage.get('key'))!.responseBody).toBe('long retention');
+      } finally {
+        await client.del(key);
+        await client.quit();
+      }
+    },
+  );
+
   it('a repeated completion does not refresh the server retention TTL', async () => {
     const client = new Redis(REDIS_URL!);
     const keyPrefix = `idempotency:retention:${randomUUID()}:`;

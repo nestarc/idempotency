@@ -44,6 +44,7 @@ import {
   type HeaderReplayResponse,
 } from './utils/response-headers';
 import { stableJsonStringify } from './utils/stable-json';
+import { assertTtlSeconds } from './utils/ttl';
 import type {
   IdempotencyOptions,
   IdempotencyEvent,
@@ -457,28 +458,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
   private resolveOptions(metadata: IdempotentMetadata): ResolvedOptions {
     const ttl =
       metadata.ttl ?? this.moduleOptions.ttl ?? DEFAULT_TTL_SECONDS;
-    // Guard against footguns: ttl must be a positive integer number of seconds.
-    // A zero or negative TTL would produce immediately-expired records (Redis
-    // in particular rejects EX <= 0), and fractional seconds round unpredictably
-    // across adapters. Fail fast at the interceptor boundary so the error
-    // surfaces at request time with the exact bad value.
-    if (typeof ttl !== 'number' || !Number.isFinite(ttl) || !Number.isInteger(ttl) || ttl <= 0) {
-      throw new Error(
-        `IdempotencyInterceptor: ttl must be a positive integer number of seconds, received ${String(ttl)}`,
-      );
-    }
+    // Match direct adapter calls and reject invalid configuration before any
+    // storage or business work, including when a custom adapter is supplied.
+    assertTtlSeconds(ttl, 'IdempotencyInterceptor: ttl');
     const processingTtl =
       metadata.processingTtl ?? this.moduleOptions.processingTtl ?? ttl;
-    if (
-      typeof processingTtl !== 'number' ||
-      !Number.isFinite(processingTtl) ||
-      !Number.isInteger(processingTtl) ||
-      processingTtl <= 0
-    ) {
-      throw new Error(
-        `IdempotencyInterceptor: processingTtl must be a positive integer number of seconds, received ${String(processingTtl)}`,
-      );
-    }
+    assertTtlSeconds(processingTtl, 'IdempotencyInterceptor: processingTtl');
     const maxKeyLength = metadata.maxKeyLength !== undefined
       ? metadata.maxKeyLength
       : this.moduleOptions.maxKeyLength !== undefined

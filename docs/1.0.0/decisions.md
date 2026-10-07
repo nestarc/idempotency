@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D05와 D06의 수명 계약을 결정했다. D06의 긴 TTL 세부 정책(S6-5), D07·D08은 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01~D06을 결정했다. D06은 긴 TTL·직접 입력 정책까지 포함하며, D07·D08은 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -19,7 +19,7 @@
 | D03 | DECIDED | S3 | 함수형 scope의 identity + endpoint 합성, JSON tuple SHA-256 key v1, raw string/UTF-8 입력 계약 | 기존 키 재사용·혼합 배포 불가; 아래 D03의 업무 중복 방지 전환 전제 필수 |
 | D04 | DECIDED | S4 | raw key와 독립된 namespace, encoded key의 SHA-256, 고정 오류 분류와 안전 로그 | event.scope 제거, 원본 Error 필드 제거; callback 격리 및 현재 오류 경로는 아래 D04, S5/S6 통합 재검증 필요 |
 | D05 | DECIDED | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
-| D06 | DECIDED | S6 | 만료·token·반복 complete 수명 계약; 긴 TTL 범위는 S6-5 미결 | Memory/Redis/PG 동일 동작, stale token, custom adapter 변경, schema 필요 여부 |
+| D06 | DECIDED | S6 | 만료·token·반복 complete, TTL 1~2,147,483,647초·직접 호출 선행 검증 | Memory/Redis/PG 동일 동작, custom adapter 검증·긴 TTL 지원, schema 변경 없음 |
 | D07 | OPEN | S7 | 기존 저장 레코드·키·schema를 사용하는 서비스의 전환과 복구 절차 | 이전 tenant/user 권한 검증, 중복 실행, 롤링 배포·롤백, webhook 보존기간과 업무 DB 확인 |
 | D08 | OPEN | S8 | 지원 Node/Nest/HTTP adapter 조합과 artifact 검증·게시 경로 | Node 20 유지 여부, 22/24 검증, 실DB skip 차단, 동일 artifact 검증, RC 증거 |
 
@@ -152,12 +152,15 @@ D07 전체는 S5/S6의 실패·만료 계약과 S7 실행 전환 절차가 완�
 
 ## D06 — 저장소 공통 계약 (DECIDED)
 
-- 날짜/결정자: 2026-10-07, Codex. S5 선행 조건으로 S6-1/2/3/4/6/7의 수명 계약을 확정·구현했다. **긴 TTL/직접 adapter 입력 검증 범위는 S6-5의 미결 세부 정책이며 S6 전체 완료를 뜻하지 않는다.**
+- 날짜/결정자: 2026-10-07, Codex. S5 선행 수명 계약에 이어 S6-5의 긴 TTL·직접 adapter 입력 정책까지 확정·구현했다.
 - 만료: Memory/PG는 `expiresAt <= now`부터 논리적으로 부재다. Redis는 서버 TTL을 권위로 삼고 payload의 client-clock expiresAt은 조회용 메타데이터다. 서로 다른 프로세스/DB 시계가 정확히 일치한다는 보장은 추가하지 않는다. physical timer/sweep 실행 여부와 무관하게 get은 null, create는 새 token 획득 가능, complete는 stale, delete는 ok다.
 - complete-once: 활성 PROCESSING + 동일 token만 COMPLETED로 전환하고 성공 응답/headers/새 retention TTL을 저장한다. 최초 createdAt은 유지한다. 같은 token의 반복 또는 동시 complete는 첫 성공 이후 stale이며 최초 응답과 TTL을 바꾸지 않는다. 대체 token이 없어도 만료한 token은 stale다.
 - delete: 활성 소유 token이면 삭제 ok, 활성 다른 token이면 stale로 보존, 부재/만료이면 ok다. PG 만료 행의 물리 삭제를 약속하지 않는다. stale 반환은 업무 실패/중단 또는 안전한 업무 재시도의 증거가 아니다.
-- 구현: Memory 모든 연산의 논리 만료 검사를 공유한다. PG create의 정확한 경계를 <=로 통일하고 complete/delete에 만료 조건을 추가한다. Redis Lua는 token과 읽었던 PROCESSING payload를 함께 비교해 동시 완료 두 개가 모두 성공하지 못하게 한다. body는 S1 opaque string으로 취급한다.
+- TTL: 모든 adapter의 create/complete와 interceptor의 module/decorator `ttl`·`processingTtl`은 **1~2,147,483,647초(양 끝 포함)**의 정수만 허용한다. `Number.isSafeInteger`와 범위 검사로 비숫자·0·음수·소수·NaN·무한대·안전 정수 밖·상한 초과를 거절한다. 30일과 최대값은 유효하다. 유효한 TTL을 받았을 때의 상태표이며, 잘못된 TTL은 NX/CAS·만료 검사보다 먼저 `RangeError`로 reject한다. 저장소 조회·변경·timer 정리는 수행하지 않는다. interceptor에서는 handler/storage 호출 전 요청 시점의 설정 오류(기본 HTTP 500)다.
+- TTL 대안/근거: Node timer의 약 24.8일 상한을 TTL 자체에 적용하면 30일 사용을 막으므로 채택하지 않았다. 제한 없는 safe integer 초도 ms/Date/DB 범위를 넘으므로 채택하지 않았다. 명시적인 32-bit 양수 **초** 범위는 현재 날짜에서 ms/Date 변환 및 Redis EXPIRE·PG interval에 여유가 있고 backend별 범위 차이를 숨기지 않는다. Node timer의 같은 숫자는 **밀리초** 상한이므로 Memory는 deadline까지 최대 2,147,483,647ms씩 나눠 예약한다. 조용한 clamp·문자열 숫자 변환은 하지 않는다.
+- 직접 입력 책임: built-in과 custom adapter가 TTL을 매 호출 검증한다. 내부 공통 helper는 새 public export가 아니며 custom adapter는 동일 계약을 구현한다. 나머지 key/token/response 입력 전체의 런타임 schema 검증을 추가하는 결정은 아니다. 기존 token 판정과 타입 계약은 유지한다.
+- 구현: Memory 모든 연산의 논리 만료 검사를 공유하고 timer callback도 deadline을 재검사한다. Entry identity로 교체·완료 후 남은 callback을 무효화하며 각 chunk를 unref하고 delete/destroy/complete에서 timer를 정리한다. PG create의 정확한 경계를 <=로 통일하고 complete/delete에 만료 조건을 추가한다. Redis Lua는 token과 읽었던 PROCESSING payload를 함께 비교해 동시 완료 두 개가 모두 성공하지 못하게 한다. body는 S1 opaque string으로 취급한다.
 - 대안/이유: token만 검사하면 lease 권한이 이미 끝난 작업이 응답을 되살릴 수 있다. repeated complete 덮어쓰기/TTL 갱신은 뒤늦은 호출이 최초 확정 결과를 바꾸므로 채택하지 않는다. 동일 token repeated를 ok로 다루는 멱등 확인 API도 도입하지 않는다. 기존 ok/stale 시그니처를 유지하고 이미 완료된 경우 stale로 통일한다.
-- 영향: 공개 시그니처·저장 key·SQL schema 변화 없음. Memory/Redis의 반복 완료, Memory/PG의 늦은 완료 결과가 바뀐다. custom adapter도 위 논리적 만료와 complete-once 원자성을 구현해야 한다. 긴 TTL overflow를 해결했다거나 모든 직접 입력을 검증한다고 주장하지 않는다.
-- 검증: 공유 contract의 동시 create/complete, 응답/TTL/createdAt 보존, 만료와 대체 token, Memory -1/0/+1ms, PG transaction의 고정 now 경계, 실제 Redis 서버 expiry를 검사했다. [S6 기록](work-items/S6-storage-contract.md)의 143 pass/0 skip 및 [S5 기록](work-items/S5-failure-lifecycle.md)의 최종 통합 결과를 따른다.
-- 후속: S6-5는 긴 TTL 및 직접 호출 입력 책임을 확정하고 같은 공통 suite를 재실행한다. S7에는 custom adapter 호환성, S8에는 실제 DB/지원 버전 전체 검증을 넘긴다.
+- 영향: 공개 시그니처·저장 key·SQL schema 변화 없음. Memory/Redis의 반복 완료, Memory/PG의 늦은 완료 결과가 바뀐다. custom adapter도 논리적 만료·complete-once 원자성 및 TTL 범위·검증 순서를 구현해야 한다. 과거 받아들인 상한 초과 TTL 또는 직접 호출의 잘못된 TTL은 이제 RangeError이며, 30일 Memory TTL은 조기 삭제되지 않는다.
+- 검증: 공유 contract의 동시 create/complete, 응답/TTL/createdAt 보존, 만료와 대체 token, Memory -1/0/+1ms, PG transaction의 고정 now 경계, 실제 Redis 서버 expiry에 긴 TTL·범위·직접 호출 검사를 추가했다. [S6 기록](work-items/S6-storage-contract.md)의 최종 증거와 [S5 기록](work-items/S5-failure-lifecycle.md)의 선행 통합 결과를 따른다.
+- 후속: S7에는 custom adapter 호환성과 TTL 설정 오류·전환 설명, S8에는 실제 DB 필수 검증·같은 tarball·지원 버전 전체 검증을 넘긴다.

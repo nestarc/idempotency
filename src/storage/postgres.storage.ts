@@ -10,6 +10,7 @@ import type {
 } from '../interfaces/idempotency-storage.interface';
 import type { IdempotencyRecord } from '../interfaces/idempotency-record.interface';
 import { isMissingPeer } from '../utils/optional-peer';
+import { assertTtlSeconds } from '../utils/ttl';
 
 /**
  * Constructor options for {@link PostgresStorage}.
@@ -172,6 +173,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
     fingerprint: string | undefined,
     ttlSeconds: number,
   ): Promise<CreateResult> {
+    assertTtlSeconds(ttlSeconds, 'PostgresStorage.create: ttlSeconds');
     const token = randomUUID();
     const result = await this.pool.query<{ token: string }>(
       `INSERT INTO ${quoteIdent(this.tableName)}
@@ -202,6 +204,7 @@ export class PostgresStorage implements IdempotencyStorage, OnModuleDestroy {
     response: CompleteResponse,
     ttlSeconds: number,
   ): Promise<MutateResult> {
+    assertTtlSeconds(ttlSeconds, 'PostgresStorage.complete: ttlSeconds');
     try {
       const result = await this.pool.query(
         // NOTE: created_at is intentionally NOT in the SET clause — leaving it

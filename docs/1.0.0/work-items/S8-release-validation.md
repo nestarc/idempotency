@@ -185,3 +185,15 @@ handler 횟수·원장 결과·token/상태·클라이언트 결과를 기록한
 주입이며 실제 네트워크 단절/DB failover를 재현하지 않는다. provider 조정·복제 durability,
 최종 Node/Nest matrix와 같은 tarball의 소비자 검증은 S8 최종 대상에서 따로 확인한다.
 S6의 긴 TTL/범위·전체 계약 완료나 S7 전체 recipe 완료를 S5 통과로 대신하지 않는다.
+
+### S6 공통 계약·긴 TTL 인수인계 (2026-10-07)
+
+S6 전체는 [최종 검증 기록](S6-storage-contract.md#2026-10-07-s6-최종-검증-증거)과 [보존 JSON](../evidence/S6-validation.json)으로 완료했다.
+Node24.11.1/Nest11, Redis7.2.7/PG16.14에서 전체38 suites/908 pass/0 skip, lint·타입·build를 확인했다.
+같은 S6 tarball의 소비자는41 pass/기대된 실패3/0 skip이며 artifact SHA-256과 경로는 보존 JSON을 따른다.
+공통 contract가 1초·30일·최대2,147,483,647초, 16종 invalid 값과 상태별 선행 검증을 검사한다.
+필수 대상에 `memory-long-ttl.spec.ts`, `storage-ttl-validation.spec.ts`, `ttl-validation.spec.ts`,
+`storage-lifecycle-contract.spec.ts`, `postgres-adapter.spec.ts`와 storage 전체를 포함한다.
+native Node overflow 회귀와 실제 Redis PTTL 검사는 mock/fake timer로 대체하지 않는다.
+두 서비스 URL을 제공하고 전체 JSON의 pending/skip=0을 확인한다. 일반 spec의 환경 누락 skip 경로는 아직 유지되므로 S8 gate에서 반드시 차단한다.
+긴 TTL의 실제 수십 년 경과·분산 시계 동기화를 검증한 것으로 표현하지 않는다. S7 전환 예제, 최종 지원 matrix와 동일 artifact 출시 연결은 S8 잔여 범위다.

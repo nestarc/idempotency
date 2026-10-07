@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep Memory records with TTLs longer than Node's timer limit, including
+  30-day windows. Deadline-based timer chunks recheck expiration and cannot
+  delete a completed or replacement record through an old callback.
 - Isolate handler errors from response-capture and completion failures. Both
   synchronous storage throws and Promise rejections preserve the same outcome;
   completion failure never deletes a successful operation's record, and failed
@@ -44,7 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lease expiry require application-owned business reconciliation.
 - Custom storage adapters must treat `expiresAt <= now` as absent and reject
   repeated completion without refreshing the TTL. No new state, method or
-  response schema is introduced. Broader TTL-range validation remains in S6.
+  response schema is introduced.
+- TTLs now accept integer seconds from 1 through 2,147,483,647 inclusive.
+  Module/decorator `ttl` and `processingTtl`, and direct adapter `create()` /
+  `complete()` calls reject other values with `RangeError` before storage
+  access. Invalid TTLs also reject on NX/CAS misses and completed records.
+  Custom adapters must implement the same range and validation order.
 
 - **Breaking key/scope transition for 1.0:** function scopes add a string or
   readonly array of identity components to the endpoint. Every scope mode uses

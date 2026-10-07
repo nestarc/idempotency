@@ -455,6 +455,13 @@ must be a positive safe integer. Invalid configuration is a server error (500).
 
 ### Processing leases
 
+`ttl` and `processingTtl` accept integer seconds from **1 through 2,147,483,647**
+inclusive. All three adapters support 30-day windows. Invalid configuration
+produces a `RangeError` at request time before storage or handler execution
+(a configuration error, HTTP 500 by default). Direct adapter `create()` and
+`complete()` calls reject invalid TTLs before storage access, even when the key
+is missing, occupied, expired or already completed.
+
 By default, `PROCESSING` records and completed replay records use the same
 `ttl`. For long replay windows, you can use a shorter `processingTtl` so stuck
 in-flight records expire sooner after a crash. Expiry permits a new acquisition;
@@ -698,7 +705,7 @@ When a racing winner has already finished with a supported payload and matching 
 | ---------------- | ---------------------- | ---------------------- | ---------------------------------------- |
 | Scope            | single process         | shared across replicas | shared across replicas                   |
 | Persistence      | none (lost on restart) | depends on Redis configuration | depends on Postgres configuration |
-| TTL mechanism    | `setTimeout`           | Redis `EXPIRE`         | lazy on `get()` + optional sweep service |
+| TTL mechanism    | deadline checks + chunked timers | Redis `EXPIRE` | deadline checks + optional sweep service |
 | Cluster-safe     | ❌                     | ✅                     | ✅                                       |
 | Production-ready | ❌ (dev/test only)     | ✅                     | ✅                                       |
 | Required peer    | none                   | `ioredis ^5`           | `pg ^8.11`                               |
@@ -711,6 +718,11 @@ use `expiresAt <= now`; Redis uses server TTL, with client-clock `expiresAt` met
 compare-and-set**: `create()` returns an opaque token, and mutations cannot
 change a live record belonging to another token. `complete()` additionally
 requires PROCESSING and must leave an already completed record unchanged.
+Before any lookup or mutation, `create()` and `complete()` must reject TTLs
+outside the integer range `[1, 2_147_483_647]` with `RangeError`. Do not coerce
+strings, clamp values, or let an NX/CAS miss hide an invalid TTL. Implementations
+must support the whole range; native timers may need to split long deadlines
+into smaller waits. This contract validates TTLs, not every record field.
 
 ```ts
 import type {
@@ -732,6 +744,7 @@ class MyStorage implements IdempotencyStorage, OnModuleDestroy {
     fingerprint: string | undefined,
     ttlSeconds: number,
   ): Promise<CreateResult> {
+    // First validate ttlSeconds (integer 1..2_147_483_647) or throw RangeError.
     // NX semantics: if the key already exists, return { acquired: false }.
     // Otherwise, generate an opaque token (e.g. randomUUID()), persist it
     // alongside the PROCESSING record, and return { acquired: true, token }.
@@ -745,6 +758,7 @@ class MyStorage implements IdempotencyStorage, OnModuleDestroy {
     response: CompleteResponse,
     ttlSeconds: number,
   ): Promise<MutateResult> {
+    // First validate ttlSeconds, even if this call would otherwise be stale.
     // Atomically require an unexpired PROCESSING record with this token.
     // Return 'stale' without mutation for missing, expired, different-token
     // or already-COMPLETED records. On first success, return 'ok', refresh
@@ -780,7 +794,7 @@ This package targets the behavior described by [`draft-ietf-httpapi-idempotency-
 - ✅ Response replay for completed requests (matching fingerprint)
 - ✅ **409 Conflict** for in-flight requests and stored response formats that cannot be safely replayed
 - ✅ **422 Unprocessable Entity** for fingerprint mismatch — priority over PROCESSING state per draft semantics
-- ✅ Configurable completed replay TTL and optional processing TTL with boundary validation (positive integer only)
+- ✅ Configurable completed replay TTL and optional processing TTL (integer seconds 1–2,147,483,647, including direct adapter validation)
 - ✅ **Per-endpoint key scoping by actual request path** — the draft's "(key, request URI)" recommendation is implemented as `HTTP_METHOD /actual/path::rawKey`, excluding the query string to avoid accidental key drift
 - ✅ Binary response detection — Buffer, typed arrays, and Node/Web streams are bypassed rather than cached as JSON garbage
 - ✅ Safe response header replay for `Content-Type`, `Location`, `ETag`, `Cache-Control`, and custom `X-*` headers
