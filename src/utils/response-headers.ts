@@ -19,6 +19,9 @@ const DEFAULT_ALLOWED_HEADERS = new Set([
 ]);
 
 const DENIED_HEADERS = new Set([
+  // Observability headers describe this request and must never come from cache.
+  'idempotency-status',
+  'idempotency-replayed',
   'set-cookie',
   'connection',
   'transfer-encoding',

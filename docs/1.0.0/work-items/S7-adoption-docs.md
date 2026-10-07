@@ -58,6 +58,26 @@ npm run build
 
 ## 다음 작업자에게
 
+### S4 운영 관측 인수인계 (2026-10-07)
+
+[D04](../decisions.md#d04--관측-정보-보호-decided)를 확정하고
+[README Observability](../../../README.md#observability)에 고정 outcome만 집계하는 recipe,
+event.scope→namespace 전환, 새 error code/operation union, callback 격리와 진단 한계를 반영했다.
+namespace는 raw key가 없는 scope tuple hash, keyHash는 S3 encoded storage key의 SHA-256이다.
+S3 전환으로 0.4 keyHash와 달라지고 scope 변경도 두 값에 영향을 준다.
+암호화/익명화 보장이 없으며 namespace/keyHash 모두 높은 cardinality를 가질 수 있으므로
+metric label 예제로 사용하지 않는다. raw key/body나 원본 Error를 로그하는 예제도 추가하지 않는다.
+
+원본 error.message/name/stack/cause/driver code는 제공하지 않는다.
+storage 실패는 고정 `storage_failure`와 `get/create/race_get/complete/delete` operation으로 구분한다.
+callback은 await하지 않는 best-effort 처리로, throw/rejection은 고정 경고만 내고 원 요청을 보존한다.
+status header 기본값은 유지하며 비활성화 시 과거 record의 관측 헤더도 replay하지 않는다.
+`Idempotency-Status`/`Idempotency-Replayed`는 명시 allowlist에도 capture/replay 금지다.
+
+S7 자체 실행 예제 검증은 여전히 남아 있다. README 관측 부분 갱신을 전체 도입 문서 완성으로
+간주하지 않는다. D05/D06/D07은 OPEN이며 최종 실패·취소·만료/복구 recipe는 S5/S6 인계 후 작성한다.
+S4의 실제 명령·검증 제한은 [S4 작업 기록](S4-observability.md)을 따른다.
+
 ### S3 / D07 전환 인수인계 (2026-10-07)
 
 [D03](../decisions.md#d03--요청-격리와-키-입력-decided)이 확정됐다. 함수형 scope는
@@ -114,8 +134,8 @@ legacy/corrupt COMPLETED도409이며 새 body는 opaque string이다. 키/schema
 구/신 reader·writer 혼합 배포/롤백을 지원하지 않으며 traffic pause→drain→전체 교체가 필요하다.
 기존 키 삭제·자동 회전으로409를 피하도록 안내하지 않는다. S3의 향후 키 전환과 함께 D07을 마무리한다.
 
-- 마지막 갱신: 2026-10-06. S7 자체 구현·예제 검증 미착수. S1·S2의 README/CHANGELOG 계약 갱신은 위 인계 참조.
+- 마지막 갱신: 2026-10-07. S7 자체 구현·예제 검증 미착수. S1~S4의 README/CHANGELOG 계약 갱신은 위 인계 참조.
 - 다음 행동: README sweep 블록을 소비자 TestModule로 재현하고 필요한 provider와 실제 소유한 Pool이 같은지 확인한다.
-- 미결: D07 및 선행 D04~D06. D01·D02·D03은 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
+- 미결: D07 및 선행 D05·D06. D01·D02·D03·D04는 확정됐다. 상태별 동작이나 마이그레이션은 미확정 API를 예제로 먼저 고정하지 않는다.
 - 인계 대상: S8에 실행 예제 목록, 공식 import/지원 구성, 업그레이드·롤백 테스트와 남은 제한을 전달한다.
 - 검증 기록: 대상 commit/artifact, 환경, 명령, pass/fail/skip, 증거와 남은 제한을 실행 후 기록한다.

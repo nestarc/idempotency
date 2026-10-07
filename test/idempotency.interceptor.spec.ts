@@ -16,7 +16,7 @@ import { IDEMPOTENT_METADATA_KEY } from '../src/idempotency.constants';
 import { stableJsonStringify } from '../src/utils/stable-json';
 import { encodeReplayBody } from '../src/utils/replay-body';
 import { createRequestKey } from '../src/utils/request-key';
-import type { IdempotencyOptions } from '../src/interfaces/idempotency-options.interface';
+import type { IdempotencyEvent, IdempotencyOptions } from '../src/interfaces/idempotency-options.interface';
 import type { IdempotentMetadata } from '../src/interfaces/idempotency-options.interface';
 
 import { FakeStorage } from './support/fake-storage';
@@ -1032,6 +1032,7 @@ describe('IdempotencyInterceptor', () => {
       });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringMatching(/not replayable.*retaining.*PROCESSING/i),
+        expect.objectContaining({ code: 'response_not_replayable' }),
       );
 
       const retry = buildCallHandler(of('NEVER'));
@@ -1102,6 +1103,7 @@ describe('IdempotencyInterceptor', () => {
       // A warning was emitted.
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringMatching(/stale token/i),
+        expect.objectContaining({ code: 'stale_completion' }),
       );
       warnSpy.mockRestore();
     });
@@ -1141,7 +1143,7 @@ describe('IdempotencyInterceptor', () => {
 
   describe('J. observability and status headers', () => {
     it('emits a redacted created event and sets Idempotency-Status on first execution', async () => {
-      const events: Array<{ outcome: string; keyHash: string }> = [];
+      const events: IdempotencyEvent[] = [];
       const { interceptor } = buildInterceptor({
         observability: {
           onEvent: (event) => {
@@ -1172,6 +1174,9 @@ describe('IdempotencyInterceptor', () => {
       expect(events[0]).toMatchObject({ outcome: 'created' });
       expect(events[0].keyHash).not.toBe('K-created');
       expect(events[0].keyHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(events[0].namespace).toBe(createRequestKey(['global'], 'K-created').namespace);
+      expect(events[0]).not.toHaveProperty('scope');
+      expect(JSON.stringify(events)).not.toContain('K-created');
     });
 
     it('sets replay status headers and emits replayed when returning a cached response', async () => {
@@ -1418,6 +1423,7 @@ describe('IdempotencyInterceptor', () => {
       expect(result).toEqual({ ok: true });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringMatching(/observability onEvent/i),
+        expect.objectContaining({ code: 'callback_failure' }),
       );
       warnSpy.mockRestore();
     });
@@ -1972,6 +1978,7 @@ describe('IdempotencyInterceptor', () => {
         });
         expect(warnSpy).toHaveBeenCalledWith(
           expect.stringMatching(/not replayable.*retaining.*PROCESSING/i),
+          expect.objectContaining({ code: 'response_not_replayable' }),
         );
 
         const retry = buildCallHandler(of('NEVER'));

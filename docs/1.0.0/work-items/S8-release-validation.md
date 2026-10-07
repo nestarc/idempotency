@@ -98,6 +98,21 @@ S2의 package 경계, S6의 상태 계약, S7의 실행 예제와 마이그레�
 
 ## 다음 작업자에게
 
+### S4 관측 검증 인수인계 (2026-10-07)
+
+[D04](../decisions.md#d04--관측-정보-보호-decided)의 공개 event는 namespace/keyHash와
+고정 error code/operation만 전달하며 event.scope 및 원본 Error payload를 제거했다.
+S2 공통 fixture는 새 root 타입과 제거된 필드의 컴파일 기대 오류를 검사한다.
+S4 관측 회귀는 전체 event/logger 인자에 심은 가짜 비밀 값, 각 storage 단계의 동기 throw/rejection,
+이벤트 횟수, callback 실패 격리, status header enable/disable과 legacy 저장 헤더의 재생 차단을 다룬다.
+검증 명령·실제 pass/fail/skip·artifact는 [S4 작업 기록](S4-observability.md)을 참조한다.
+이 인계 자체는 새 실행 증거가 아니며 이전 S2 tarball 결과를 변경된 타입의 검증으로 재사용하지 않는다.
+
+S5는 미착수/D05 OPEN, S6도 미완료다. S5/S6의 최종 오류·만료 상태 전이를 반영한 commit에서
+관측 회귀와 같은 tarball의 소비자 타입 검사를 다시 실행한다. fake storage 장애 결과는
+실제 Redis/PG 장애 주입이나 crash/불명 쓰기 복구 증거를 대신하지 않는다.
+실제 DB 생략 여부, 최종 지원 matrix, RC/출시 판단은 기존 S8 gate를 따른다.
+
 ### S2 인수인계 (2026-10-06)
 
 [소비자 실행기](../../../scripts/consumer-package.mjs)와 [fixture 안내](../../../test/consumers/README.md)를 추가했다.

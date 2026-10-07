@@ -9,6 +9,7 @@ import {
 
 import { IDEMPOTENCY_SWEEP_OPTIONS } from '../idempotency.constants';
 import { PostgresStorage, quoteIdent } from '../storage/postgres.storage';
+import { logDiagnostic } from '../utils/observability';
 
 export interface SweepOptions {
   /** When false, the service is wired up but never schedules a sweep. */
@@ -46,9 +47,7 @@ export class PostgresSweepService implements OnModuleInit, OnModuleDestroy {
     if (!this.options.enabled) return;
     const interval = this.options.intervalMs ?? 60_000;
     this.timer = setInterval(() => {
-      void this.sweep().catch((err) =>
-        this.logger.error(`sweep failed: ${(err as Error).message}`, err as Error),
-      );
+      void this.sweep().catch(() => logDiagnostic(this.logger, 'sweep_failure'));
     }, interval);
     if (typeof this.timer.unref === 'function') this.timer.unref();
   }

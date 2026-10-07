@@ -12,6 +12,7 @@ import {
   type CreateResult,
   type IdempotencyAsyncOptions,
   type IdempotencyEvent,
+  type IdempotencyEventError,
   type IdempotencyFingerprintInput,
   type IdempotencyFingerprintResolver,
   type IdempotencyKeyResolver,
@@ -23,6 +24,7 @@ import {
   type IdempotencyScope,
   type IdempotencyStatus,
   type IdempotencyStorage,
+  type IdempotencyStorageOperation,
   type IdempotentMetadata,
   type IdempotentOptions,
   type MutateResult,
@@ -38,6 +40,31 @@ export type StorageContract = {
   createResult: CreateResult;
   mutateResult: MutateResult;
 };
+
+export type ObservabilityContract = {
+  namespace: IdempotencyEvent['namespace'];
+  keyHash: IdempotencyEvent['keyHash'];
+  error: IdempotencyEventError;
+  operation: IdempotencyStorageOperation;
+};
+
+// @ts-expect-error The raw-key-bearing scope field was removed from public events.
+export type RemovedEventScope = IdempotencyEvent['scope'];
+// @ts-expect-error Event errors contain fixed classifications, never driver messages.
+export type RemovedEventErrorMessage = IdempotencyEventError['message'];
+
+export const storageOperations: IdempotencyStorageOperation[] = [
+  'get',
+  'create',
+  'race_get',
+  'complete',
+  'delete',
+];
+
+export const eventErrors: IdempotencyEventError[] = [
+  { code: 'storage_failure', operation: 'race_get' },
+  { code: 'response_not_replayable' },
+];
 
 export const publicValues = {
   DEFAULT_HEADER_NAME,
@@ -58,6 +85,15 @@ export function consumerOptions(storage: IdempotencyStorage): IdempotencyOptions
     exposeStatusHeaders: true,
     onEvent: async (event: IdempotencyEvent) => {
       outcomes.push(event.outcome);
+      const namespace: string = event.namespace;
+      const keyHash: string = event.keyHash;
+      const error: IdempotencyEventError | undefined = event.error;
+      if (error?.code === 'storage_failure') {
+        const operation: IdempotencyStorageOperation = error.operation;
+        void operation;
+      }
+      void namespace;
+      void keyHash;
     },
   };
   const scope: IdempotencyScope = (context) =>

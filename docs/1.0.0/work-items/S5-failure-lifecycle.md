@@ -124,6 +124,24 @@ storage API 또는 상태 모델 변경이 필요하면 S6·S2와 먼저 합의�
 
 ## 다음 작업자에게
 
+### S4 관측 경계 인수인계 (2026-10-07)
+
+[D04](../decisions.md#d04--관측-정보-보호-decided)의 error payload는 패키지 상수만 포함한다.
+`get/create/race_get/delete` 실패는 `storage_error` 1회,
+`complete` 실패는 `complete_error` 1회이며 operation으로 위치를 구분한다.
+handler 오류 자체와 성공 cleanup은 새 이벤트를 내지 않고 onEvent 실패는 고정 로그만 1회 낸다.
+동기 storage throw도 rejection과 같은 관측 경계로 들어가도록 보호했다.
+`complete` 동기 throw를 handler 실패로 오분류해 cleanup하는 초기 재현은 S4에서 수정하므로,
+위 기준 코드 표와 S1 인계의 동기 throw 항목은 역사적 baseline이다.
+complete 실패에서는 성공 값을 전달하고 delete하지 않으며, delete 실패는 원 handler 오류를 보존한다.
+원래 오류를 애플리케이션에 전파하는 경로에서도 event/logger에는 그 객체나 필드를 전달하지 않는다.
+
+S5 작업 자체와 D05는 여전히 미착수/OPEN이다. S4 fake storage 회귀는 실제 DB의 불명 쓰기,
+취소/crash/lease 만료 또는 업무 원장 조정을 검증한 증거가 아니다.
+S5가 실패·취소 전이를 정하고 S6 계약을 통합한 뒤 S4의 전체 payload/이벤트 횟수/콜백 격리 회귀를
+재실행한다. 상태 전이가 바뀌어도 `namespace`, `keyHash`, 고정 error code/operation만 내보내는
+경계와 status header 비활성화 계약을 유지한다. S4 실제 실행 증거는 [S4 기록](S4-observability.md)을 참조한다.
+
 ### S1 인수인계 (2026-10-06)
 
 [S1](S1-response-replay.md) 구현과 D01을 먼저 읽는다. `acquireAndRun`은
@@ -133,7 +151,7 @@ PROCESSING을 보존한다. 완료 전 cancel도 complete/delete하지 않는다
 동기 storage throw, capture 중 예외, complete 진행 중 취소, 업무 결과 불명 정책은 S5의 남은 범위다.
 S6 계약이 확정되면 이 파이프라인 위에 통합한다. S1 성공 뒤 bypass를 delete하는 회귀를 만들지 않는다.
 
-- 구현 미착수. 마지막 갱신: 2026-10-06. 상태 갱신은 [작업판](../README.md)에서 수행한다.
+- S5 자체 구현 미착수. 마지막 갱신: 2026-10-07, S4 인수인계 추가. 상태 갱신은 [작업판](../README.md)에서 수행한다.
 - 다음 구체 행동: S5-1 재현을 자체 fixture로 고정하고, S1·S6 담당과 S5-2 전이 표의 입력 계약을 정리한다.
 - 미결: handler-error 보존 여부, 취소 후 기록 정책, 불명 쓰기의 재조회, stale 결과 처리와 crash 조정 절차.
-- 증거 없음: 수정 후 테스트, 실제 다중 프로세스 crash, 실제 Redis/PG 장애 주입, 늦은 업무 결과의 조회·조정 절차 검증. 자동 조정 기능 구현은 범위 밖이다.
+- S5 자체 증거 없음: 최종 상태 전이 검증, 실제 다중 프로세스 crash, 실제 Redis/PG 장애 주입, 늦은 업무 결과의 조회·조정 절차 검증. S4 오류 관측 검증은 위 인계로 구분하며 자동 조정 기능 구현은 범위 밖이다.

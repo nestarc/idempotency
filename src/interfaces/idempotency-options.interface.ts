@@ -66,16 +66,33 @@ export type IdempotencyOutcome =
   | 'complete_error'
   | 'storage_error';
 
+/** The failed storage call; race_get is the re-read after losing create(). */
+export type IdempotencyStorageOperation =
+  | 'get'
+  | 'create'
+  | 'race_get'
+  | 'complete'
+  | 'delete';
+
+/** Package-owned diagnostics. Original thrown values are never included. */
+export type IdempotencyEventError =
+  | { code: 'storage_failure'; operation: IdempotencyStorageOperation }
+  | { code: 'response_not_replayable' };
+
 export interface IdempotencyEvent {
   outcome: IdempotencyOutcome;
+  /** SHA-256 of the v1 encoded storage key; not a metric label or encryption. */
   keyHash: string;
-  scope: string;
+  /** S3 v1 identity + endpoint namespace hash, independent of the raw key. */
+  namespace: string;
   statusCode?: number;
-  error?: unknown;
+  error?: IdempotencyEventError;
 }
 
 export interface IdempotencyObservabilityOptions {
+  /** Best effort, not awaited. Throws/rejections never change request handling. */
   onEvent?: (event: IdempotencyEvent) => void | Promise<void>;
+  /** Defaults to true. These headers are generated afresh, never replayed. */
   exposeStatusHeaders?: boolean;
 }
 

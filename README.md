@@ -65,8 +65,8 @@ version remains 0.4.0 in this unreleased development tree.
 
 The root also exports `IdempotencyKeyResolver`, `IdempotencyFingerprintInput`,
 `IdempotencyFingerprintResolver`, `IdempotencyEvent`, `IdempotencyOutcome` and
-`IdempotencyObservabilityOptions`. Use `import type` for these interfaces and
-callbacks.
+`IdempotencyObservabilityOptions`, plus `IdempotencyEventError` and
+`IdempotencyStorageOperation`. Use `import type` for these interfaces and callbacks.
 
 The supported compiler baseline is TypeScript 5.7.3 with `strict: true` and
 `skipLibCheck: false`. CommonJS consumers are checked with `moduleResolution`
@@ -495,27 +495,87 @@ the default body hash and should return a deterministic semantic fingerprint.
 
 ### Observability
 
-v0.4 emits optional outcome events and status headers:
+The unreleased 1.0 event contract emits optional outcome events and status headers:
 
 ```ts
 IdempotencyModule.forRoot({
   storage: new PostgresStorage({ pool }),
   observability: {
     onEvent: (event) => {
+      // outcome has a fixed set of values. Do not use request hashes as labels.
       metrics.increment(`idempotency.${event.outcome}`);
     },
   },
 });
 ```
 
-Status headers are enabled by default:
+Events contain `outcome`, `namespace`, `keyHash`, and optional `statusCode` and
+`error`. `namespace` replaces the old `event.scope`: it is a versioned SHA-256
+hash of the scope's identity and endpoint tuple, independent of the raw key.
+`keyHash` is SHA-256 of the encoded storage key. Both are deterministic for the
+same effective inputs and key format; changing scope or the storage key format
+can change them. S3's versioned key encoding changes `keyHash` from 0.4 values.
+These hashes are neither encryption nor a guarantee of anonymity: guessed
+identities, paths or keys can still be correlated. Both may have high cardinality;
+do not use either as a metric label. The example records only the fixed outcome.
+
+`error` is a classification, never an original error object:
+
+```ts
+import type { IdempotencyEventError } from '@nestarc/idempotency';
+
+// Storage failures distinguish the exact operation.
+const storageError: IdempotencyEventError = {
+  code: 'storage_failure',
+  operation: 'race_get', // get | create | race_get | complete | delete
+};
+const replayError: IdempotencyEventError = { code: 'response_not_replayable' };
+```
+
+Consumers upgrading from `event.scope` must use `namespace`; consumers inspecting
+`error.message`, `name`, `stack`, `cause`, or driver codes must switch to
+`error.code` and, for storage failures, `error.operation`. The library does not
+read or forward those original error fields into events or internal logs.
+Internal failure logs use fixed messages and diagnostic codes, with generated
+`namespace`/`keyHash` where available, without raw/storage keys, bodies, identity,
+paths or driver errors. This also applies to PostgreSQL sweep failures.
+Application exception filters, driver logs and consumer callbacks remain
+responsible for what they log; original failures can still propagate through the
+application error path.
+
+| Failure | Event | Request behavior |
+| --- | --- | --- |
+| `get`, `create`, or race re-read (`race_get`) | One `storage_error` with its operation | Propagate the original storage failure; do not run the handler. |
+| `complete` | One `complete_error` with operation `complete` | Preserve the successful handler value and do not delete the record. |
+| Handler cleanup `delete` | One `storage_error` with operation `delete` | Preserve the original handler error. |
+| Handler value cannot be captured for replay | One `bypassed` with `response_not_replayable` | Pass through the handler value and keep the PROCESSING lease. |
+| Completed body cannot be replayed | One `conflict` without an error payload | Return 409 and keep the record. |
+
+Synchronous storage throws and Promise rejections follow the same observation
+and preservation rules. Successful cleanup and the handler error itself emit no
+additional event. A failed or ambiguous write may already have changed storage;
+an event is not proof of the final database state. Cancellation, crash recovery
+and final adapter failure contracts remain tracked in S5/S6.
+
+`onEvent` is best-effort and is not awaited. A synchronous throw or asynchronous
+rejection produces one fixed warning without another event, and cannot replace
+the request result or trigger cleanup. Do not use the callback for business
+writes whose completion the request must await.
+
+Status headers are enabled by default for responses whose headers remain writable:
 
 - `Idempotency-Status: created`
 - `Idempotency-Status: replayed` plus `Idempotency-Replayed: true`
 - `Idempotency-Status: conflict`
 - `Idempotency-Status: mismatch`
+- `Idempotency-Status: bypassed`, `stale`, or `complete_error` for those outcomes
 
-Set `observability: { exposeStatusHeaders: false }` to disable these headers.
+`storage_error` does not assign a new HTTP status or status header. Set
+`observability: { exposeStatusHeaders: false }` to disable library-generated
+status headers. `Idempotency-Status` and `Idempotency-Replayed` are always excluded
+from captured and replayed headers, even in an explicit `replayHeaders` allowlist;
+old stored copies cannot restore them when exposure is disabled. Current-request
+headers are generated from the current outcome only.
 
 ### Response header replay
 

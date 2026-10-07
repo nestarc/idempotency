@@ -46,6 +46,21 @@ describe('response header replay utilities', () => {
       });
     });
 
+    it('never captures current-request status headers even with an explicit allowlist', () => {
+      expect(
+        captureReplayHeaders(
+          {
+            getHeaders: () => ({
+              'IDEMPOTENCY-STATUS': 'created',
+              'Idempotency-Replayed': 'false',
+              location: '/orders/123',
+            }),
+          },
+          ['idempotency-status', 'IDEMPOTENCY-REPLAYED', 'location'],
+        ),
+      ).toEqual({ location: '/orders/123' });
+    });
+
     it('returns undefined when disabled', () => {
       expect(
         captureReplayHeaders(
@@ -164,6 +179,22 @@ describe('response header replay utilities', () => {
 
       expect(setHeader).toHaveBeenCalledTimes(1);
       expect(setHeader).toHaveBeenCalledWith('location', '/orders/123');
+    });
+
+    it('never replays stored status headers even with an explicit allowlist', () => {
+      const setHeader = jest.fn();
+
+      replayStoredHeaders(
+        { setHeader },
+        {
+          'Idempotency-Status': 'created',
+          'IDEMPOTENCY-REPLAYED': 'false',
+          location: '/orders/123',
+        },
+        ['IDEMPOTENCY-STATUS', 'idempotency-replayed', 'location'],
+      );
+
+      expect(setHeader.mock.calls).toEqual([['location', '/orders/123']]);
     });
 
     it('does not replay stored headers when disabled', () => {

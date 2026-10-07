@@ -2,7 +2,7 @@
 
 이 문서는 `@nestarc/idempotency` 1.0.0 개발을 이어갈 때의 시작점이다. [조사 문서](../1.0.0-stabilization-research.md)는 발견 당시의 근거를 보존하고, 이 작업판과 작업별 문서는 구현 상태와 다음 행동을 관리한다.
 
-작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1·S2·S3 구현·검증 완료, S4~S8은 미착수다.** 아직 릴리스하지 않았다. 실제 DB/지원 버전 전체 검증은 S8에 남아 있다.
+작성일: 2026-10-06. 조사 기준은 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`이다. **S1·S2·S3 완료, S4 자체 구현·검증 완료 및 S5 최종 통합 대기, S5~S8은 미착수다.** 아직 릴리스하지 않았다. 실제 DB/지원 버전 전체 검증은 S8에 남아 있다.
 
 ## 문서 사용 순서
 
@@ -30,7 +30,7 @@
 | S1 | [응답 재생 정확성](work-items/S1-response-replay.md) | DONE | Codex | 없음 | D01/지원 표/전환 규칙 인계 완료. S5는 S6 확정 뒤 완료 파이프라인에 통합 |
 | S2 | [소비자 설치와 공개 API](work-items/S2-consumer-package.md) | DONE | Codex | 없음 | D02 및 S7/S8 인계 완료. S8에서 동일 tarball 소비자 검사를 최종 matrix에 연결 |
 | S3 | [요청 격리와 키 계약](work-items/S3-request-isolation.md) | DONE | Codex | 없음 | D03 확정, 605 pass/0 skip·tarball 소비자 검증. S4 namespace 및 S7/D07 전환 조건 인계 완료 |
-| S4 | [관측 정보 보호](work-items/S4-observability.md) | TODO | 미배정 | S3의 namespace, S5의 실패 경로 | 이벤트·로그 전체에서 원본 키 노출 재현 |
+| S4 | [관측 정보 보호](work-items/S4-observability.md) | IN_PROGRESS | Codex | S3의 namespace, S5의 실패 경로 | D04/자체 구현·681 pass/소비자 검증 완료. S5 최종 파이프라인 후 S4-4·남은 완료 조건 재검증 |
 | S5 | [장애와 요청 수명주기](work-items/S5-failure-lifecycle.md) | TODO | 미배정 | S1의 응답 완료 경계, S6의 저장소 계약 | 실패 단계별 상태 전이 표와 동기 throw 재현 |
 | S6 | [저장소 공통 계약](work-items/S6-storage-contract.md) | TODO | 미배정 | 없음 | 반복 complete·만료 경계의 D06 정책 확정 |
 | S7 | [도입 예제와 전환 문서](work-items/S7-adoption-docs.md) | TODO | 미배정 | S1~S6의 확정 계약 | Postgres sweep 예제를 그대로 Nest TestModule로 재현 |
@@ -70,6 +70,12 @@ npm run test:all -- --runInBand
 | 2026-10-06 | `9610774` + S1 작업 트리 | Node24 / Nest11 / 실제 DB 없음 | prepublishOnly 및 개발 타입 검사 | 293 pass / 41 skip, lint/type/build 성공 | [S1 기록](work-items/S1-response-replay.md), 실제 DB·지원 matrix는 S8 |
 | 2026-10-06 | `c5dff13` + S2 작업 트리 | Node24.11.1 / Nest11.1.18 / Redis7.2.7 / PG16.14 | clean npm ci, prepublishOnly, 타입 검사, 실제 tarball 소비자 | 351 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S2 기록](work-items/S2-consumer-package.md), SHA-256·로그 보존; 최종 matrix는 S8 |
 | 2026-10-07 | `e2b9cec` + S3 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | lint/type/build, 전체 테스트, 실제 tarball 소비자 | 605 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S3 기록](work-items/S3-request-isolation.md), D03 및 S2/S4/S7 인계; 최종 matrix는 S8 |
+| 2026-10-07 | `2fc43d7` + S4 작업 트리 | Node24.11.1 / Nest11 / Redis7.2.7 / PG16.14 | prepublishOnly, 개발 타입 검사, 실제 tarball 소비자 | 681 pass / 0 skip; 소비자41 pass / 기대된 실패3 / 0 skip | [S4 기록](work-items/S4-observability.md), D04 및 S2/S5/S7/S8 인계; S5 최종 통합 미완료 |
+
+S4 최신 증거: D04 이벤트·로그 정제 및 현재 5개 storage 실패 경로의 회귀 통과.
+전체 **681 pass / 0 skip**, tarball 소비자 **41 pass / 기대된 실패3 / 0 skip**.
+[보존 JSON](evidence/S4-validation.json)을 따른다. D05/D06 미결 및 S5 미착수이므로 S4-4와
+S5 최종 오류 경로 대조 완료 조건은 열어 두며 S4를 DONE으로 바꾸지 않는다.
 
 S3 최신 증거: lint·개발 타입 검사·build 성공, 실제 Redis/PG 포함 **605 pass / 0 skip**.
 실제 tarball 소비자 **41 pass / 기대된 실패3 / 0 skip**. Node24/Nest11 대표 환경이며
@@ -125,3 +131,4 @@ Express adapter11.1.18/Fastify adapter11.1.19, class-transformer0.5.1.
 | 2026-10-06 | S1 완료: 최종 직렬화 JSON/Observable 완료 경계, 미지원 응답 정책, legacy409와 opaque body 전환 구현. D01 확정 및 전체 검증/후속 인계 기록. |
 | 2026-10-06 | S2 완료: 선택 peer subpath·공개 타입·격리 tarball 실행기, 실제 Redis/PG 검증. D02 확정 및 S7/S8 인계. |
 | 2026-10-07 | S3 완료: identity+endpoint 합성, v1 tuple hash, 입력 검증, 양 adapter 인증·서명 replay 검증. D03 확정 및 별도 namespace/업무 중복 방지 전환 조건을 D07/S7에 인계. |
+| 2026-10-07 | S4 자체 구현·검증: D04 namespace/안전 오류/고정 로그, sync storage 오류 관측, 상태 헤더 replay 차단, 전체·소비자 검증과 후속 인계. S5 최종 통합 전까지 IN_PROGRESS 유지. |

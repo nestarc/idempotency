@@ -162,3 +162,14 @@ S8 최종 matrix 결과가 나오기 전에는 전체 지원 환경을 검증했
 기존 root 타입 경계를 유지한다. 함수는 endpoint를 대체하지 않고 identity를 추가한다.
 `test/consumers/common/public-api.ts`에 readonly tuple 소비 예제를 반영했다.
 S3 tarball 소비자 검증 결과는 [S3 기록](S3-request-isolation.md)을 따른다.
+
+### S4 공개 관측 타입 인수인계 (2026-10-07)
+
+[D04](../decisions.md#d04--관측-정보-보호-decided)에 따라 root에서
+`IdempotencyEventError`, `IdempotencyStorageOperation`을 추가로 type export한다.
+`IdempotencyEvent.scope`는 제거되고 `namespace: string`이 추가되며, 선택 `error`는
+원본 unknown 오류 대신 고정 code/operation union이다. 소비자의 원본 오류 필드 접근은 지원하지 않는다.
+`test/consumers/common/public-api.ts`에 새 타입 import, namespace/keyHash 사용,
+storage_failure 분기 좁히기, event.scope/error.message 접근의 기대된 타입 오류를 추가했다.
+동일 tarball의 Memory/Redis/PG와 node/node16/nodenext 검사 결과는 [S4 작업 기록](S4-observability.md)을 따른다.
+이 fixture 변경만으로 새 artifact가 검증됐거나 S8 최종 matrix가 완료됐다고 해석하지 않는다.

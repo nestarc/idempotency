@@ -2,7 +2,7 @@
 
 [작업판으로 돌아가기](README.md)
 
-조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01·D02·D03을 결정해 S1·S2·S3에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
+조사 기준: 2026-10-06, 0.4.0, `9610774a767d152c4cbae49c6276a4f2d76463e4`. D01·D02·D03·D04를 결정해 S1·S2·S3·S4에 반영하며 나머지는 미결이다. 재현된 사실은 [조사 문서](../1.0.0-stabilization-research.md), 진행 상태는 작업판을 기준으로 한다.
 
 ## 기록 방법
 
@@ -17,7 +17,7 @@
 | D01 | DECIDED | S1 | 최외곽 idempotency에서 최종 plain JSON 저장, 마지막 정상 emission, 버전 표식, 미지원 lease 유지/사전 거부 | 자세한 계약과 전환 조건은 아래 D01 및 S1 문서 |
 | D02 | DECIDED | S2 | Memory/common root, Redis·PG 공식 subpath 분리; PG 타입은 소비자가 설치 | 0.4 root DB import를 /redis·/postgres로 이동; TS5.7.3 CJS node/node16/nodenext |
 | D03 | DECIDED | S3 | 함수형 scope의 identity + endpoint 합성, JSON tuple SHA-256 key v1, raw string/UTF-8 입력 계약 | 기존 키 재사용·혼합 배포 불가; 아래 D03의 업무 중복 방지 전환 전제 필수 |
-| D04 | OPEN | S4 | event namespace·keyHash·오류 정보·로그 마스킹 계약 | raw key/인증 정보/동적 경로의 노출, 기존 event 소비자, metric cardinality, callback 실패 |
+| D04 | DECIDED | S4 | raw key와 독립된 namespace, encoded key의 SHA-256, 고정 오류 분류와 안전 로그 | event.scope 제거, 원본 Error 필드 제거; callback 격리 및 현재 오류 경로는 아래 D04, S5/S6 통합 재검증 필요 |
 | D05 | OPEN | S5 | handler 실패·저장소 실패·취소·결과 불명 시 레코드와 클라이언트 동작 | 동기 throw/rejection 일치, 기록 성공 후 응답 유실, 취소 후 업무 성공, 잠금 삭제와 중복 실행 |
 | D06 | OPEN | S6 | create/complete/delete의 만료 경계와 반복 complete, 긴 TTL 정책 | Memory/Redis/PG 동일 동작, stale token, custom adapter 변경, schema 필요 여부 |
 | D07 | OPEN | S7 | 기존 저장 레코드·키·schema를 사용하는 서비스의 전환과 복구 절차 | 이전 tenant/user 권한 검증, 중복 실행, 롤링 배포·롤백, webhook 보존기간과 업무 DB 확인 |
@@ -87,7 +87,7 @@ D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 �
 - 대안: 완전 교체형 custom scope를 유지하고 별도 옵션을 추가하면 기존 tenant-only 예제가 계속 endpoint를 누락한다. 1.0에서는 함수 의미를 합성으로 바꾸어 이 원인을 제거한다. endpoint 제거가 꼭 필요한 서비스는 global의 공유 권한 전제를 직접 입증해야 한다.
 - endpoint: Express `originalUrl`, Fastify `url`의 실제 path를 사용한다. method는 대문자이며 path parameter, percent encoding, 중복/끝 slash를 그대로 구분한다. 라우터가 다른 리소스로 처리할 수 있는 slash를 임의로 합치지 않는다. query는 기존대로 제외한다. 순서·추적 파라미터 변화가 중복 실행을 만들지 않도록 유지하며, 의미 있는 query는 scope 배열에 선택한 값을 안정된 순서로 추가하거나 fingerprint에 넣어422로 구분한다. 실제 URL이 없는 custom context만 metadata path, 마지막으로 class/handler 이름에 fallback한다. fallback은 실제 HTTP path의 격리를 대신하지 못한다.
 - 키: namespace tuple은 `['global']` 또는 `['endpoint', identityParts, locationParts]`. location은 `['path', METHOD, actualPath]`, `['route', METHOD, metadataPath]`, `['handler', METHOD, className, handlerName]` 중 하나다. 저장 key는 `@nestarc/idempotency:key:v1:` + `SHA256(UTF8(JSON.stringify([namespaceTuple, rawKey])))`의 소문자 hex다. 문자열 구분자 연결이 아닌 JSON 배열 인코딩이 구성요소 경계를 보존하며, 고정 길이 hash는 긴 URL로 인한 저장소 index 길이 문제도 피한다. hash의 암호학적 충돌 한계는 남는다. SQL schema와 adapter 계약은 바꾸지 않는다.
-- 원본 키 없는 namespace: 내부 `createRequestKey()`가 별도로 `@nestarc/idempotency:namespace:v1:` + `SHA256(JSON.stringify(namespaceTuple))`를 반환한다. S4가 event/log 계약에 연결한다. hash는 암호화가 아니며 저엔트로피 identity 추측이나 cardinality 문제를 해결하지 않는다. 기존 fingerprint input.scope와 event.scope는 이번에는 새 저장 key를 받는다. D04에서 공개 관측 의미를 최종 확정한다.
+- 원본 키 없는 namespace: 내부 `createRequestKey()`가 별도로 `@nestarc/idempotency:namespace:v1:` + `SHA256(JSON.stringify(namespaceTuple))`를 반환한다. hash는 암호화가 아니며 저엔트로피 identity 추측이나 cardinality 문제를 해결하지 않는다. S3 시점 fingerprint input.scope와 event.scope는 새 저장 key를 받았다. 아래 D04에서 event.scope를 제거하고 event.namespace로 연결한다. fingerprint input.scope 계약은 별개로 유지한다.
 - 입력: header는 raw opaque string이다. Structured Field 인용·escape를 해석하지 않아 `K`와 `"K"`는 다른 키다. 누락은 undefined만 해당한다. 빈 값·공백뿐인 값·비문자열·C0/C1 제어문자·단독 surrogate·header 배열·반복 header field·쉼표가 있는 header는400이다. rawHeaders(Express 또는 Fastify raw)에서 대소문자와 무관하게 반복을 검사한다. 프록시에서 합쳐진 쉼표도 거부하지만 upstream이 이미 버린 중복 정보는 복구할 수 없다. trim/case fold/Unicode 정규화는 하지 않는다(HTTP parser의 OWS 처리는 별개).
 - resolver: header를 완전히 대체하고 동기/비동기 string 또는 undefined만 허용한다. 위 문자열 검증·길이 제한은 같으며 쉼표는 허용한다. undefined + required:false만 bypass하고 invalid input은 optional이어도400이다. resolver 자체 throw/rejection은 원래 오류를 전파한다. 모든 입력 거절은 fingerprint·저장소·handler 이전이다.
 - 길이: `maxKeyLength`는 UTF-8 bytes, 기본255, 양의 safe integer만 허용한다. handler override가 우선이다. 잘못된 설정은 서버 configuration error(HTTP500)이며 resolver/저장소/handler를 실행하지 않는다. key 오류400, 기존 body 불일치422, PROCESSING409의 우선순위를 유지한다. raw header 프로파일은 draft의 Structured Field String 파싱을 구현한 것이 아니며 S7에서 표기한다.
@@ -97,6 +97,33 @@ D01 body 계약과 D03의 별도 빈 namespace·업무 중복 방지 조건을 �
 - 회귀: 수정 전 tenant-only endpoint 충돌과 `::` 경계 충돌이 모두 실패함을 확인했다. tenant/user/method/path/key 단일 변경, 정상 retry, query/slash/parameter, header/resolver invalid, Express/Fastify guard, legacy/new 공존을 검증한다. 최종 실행 결과는 [S3 작업 기록](work-items/S3-request-isolation.md)에 기록한다.
 - 후속: S2 공개 scope 타입의 배열 반환 소비자 검사, S4 namespace/event/log, S7 raw header 프로파일·인증 예제, D07의 업무 중복 방지 조건과 전환 시나리오. D07 전체는 S5/S6 계약까지 반영한 뒤 확정한다.
 
+
+## D04 — 관측 정보 보호 (DECIDED)
+
+- 날짜/결정자: 2026-10-07, Codex. 사용자 S4 구현 요청 범위에서 결정. 기준 `2fc43d7620dcdcff0d367669acc88a5e1a05b7dd`의 작업 트리.
+- namespace: `IdempotencyEvent.scope`를 제거하고 필수 `namespace: string`으로 대체한다. S3 `createRequestKey()`의 namespace를 그대로 사용하며 raw key를 제외한 identity + endpoint JSON tuple의 versioned SHA-256이다. 유효 scope가 같으면 raw key만 바꿔도 namespace는 같다. global은 global tuple을 사용한다. identity·동적 path·원본 key를 문자열로 붙이지 않는다.
+- keyHash: 기존 S3 동작인 `SHA256(encodedStorageKey)`의 소문자 hex를 유지한다. 같은 scope/key와 같은 인코딩 버전이면 안정적이고 raw key·identity·endpoint를 바꾸면 달라질 수 있다. S3가 0.4 저장 키 형식을 바꾸었으므로 0.4 keyHash와의 연속성은 보장하지 않는다. S4 자체는 저장 키/schema를 추가로 바꾸지 않는다. 두 hash 모두 암호화·익명화 보장이 아니며 저엔트로피 값 추측, 상관관계 노출, 높은 cardinality가 남는다. metric label에는 namespace/keyHash를 사용하지 않는다.
+- error 공개 타입: `IdempotencyEventError = { code: 'storage_failure'; operation: IdempotencyStorageOperation } | { code: 'response_not_replayable' }`. `IdempotencyStorageOperation`은 `'get' | 'create' | 'race_get' | 'complete' | 'delete'`다. `error`는 선택 필드이며 원본 Error/driver 객체를 전달하지 않는다. 원본 `message/name/stack/cause/code`를 읽어 마스킹하거나 복사하지 않고 패키지 소유 상수만 생성한다. getter·순환 참조·임의 throw 값도 같은 규칙을 따른다.
+- 내부 로그: 고정 diagnostic code/message와 생성한 namespace/keyHash만 허용하며, 원본 key·storage key·body·identity·path 및 Error 객체/필드를 인자로 전달하지 않는다. bypass/stale/complete 실패/cleanup 실패/callback 실패/Postgres sweep 실패에 적용한다. 직접 호출한 Logger 메서드의 동기 throw와 반환 Promise rejection을 격리하며 재귀 로그를 내지 않는다. Nest 내부에서 반환이 버려진 custom async transport Promise는 관찰할 수 없으므로 transport가 자체 처리한다. 이벤트/로그 계약은 패키지가 생성한 관측 정보에 한정한다. 애플리케이션 exception filter·driver·onEvent 구현이 별도로 기록하는 값은 소비자가 관리한다.
+- 대안과 이유: scope 이름을 유지한 채 저장 key를 넣으면 raw key에서 분리된 grouping 의미가 불분명하고 키 변경 때마다 바뀐다. scope 제거 후 namespace를 명시한다. 원본 오류 문자열의 부분 치환은 raw key 이외의 body/인증 정보 및 중첩 cause를 보장할 수 없고 getter를 실행할 수도 있다. 고정 분류만 내보내는 방식으로 진단 상세를 제한한다. 모든 관측 필드를 없애는 대신 생성한 hash로 제한적인 상관관계 분석을 유지한다.
+
+| 실패/경로 | 이벤트 수와 분류 | 현재 클라이언트·저장 처리 |
+| --- | --- | --- |
+| 첫 `get` | `storage_error` 1회, operation `get` | 원 storage 오류 전파, handler 미실행 |
+| `create` | `storage_error` 1회, operation `create` | 원 storage 오류 전파, handler 미실행 |
+| 경합 패배 후 재조회 | `storage_error` 1회, operation `race_get` | 원 storage 오류 전파, handler 미실행 |
+| `complete` | `complete_error` 1회, operation `complete` | 성공 handler 값 보존, cleanup delete 금지 |
+| handler 오류 후 `delete` 실패 | `storage_error` 1회, operation `delete` | 원 handler 오류 보존 |
+| handler 오류와 cleanup 성공 | 추가 이벤트 없음 | 기존 handler 오류 전파 |
+| handler 반환값 capture 불가 | `bypassed` 1회, code `response_not_replayable` | handler 값 전달, PROCESSING lease 보존 |
+| 재생 불가 completed body | `conflict` 1회, error payload 없음 | 409, 기존 record 보존 |
+| onEvent 실패 | 추가 이벤트 없음, 고정 안전 로그 1회 | 원 요청 결과·레코드 처리 유지 |
+
+- 동기/비동기: 각 storage 메서드의 동기 throw와 Promise rejection은 같은 관측·보존 경계를 사용한다. `onEvent`는 await하지 않는 best-effort callback이며 동기 throw/rejection이 원 요청을 바꾸거나 cleanup을 실행하지 않는다. 오류 이벤트는 쓰기의 확정 실패나 저장소 상태를 증명하지 않는다. 예를 들어 complete 후 응답 유실이면 실제 저장소는 이미 COMPLETED일 수 있다.
+- HTTP 헤더: 기본 활성화. headers가 쓰기 가능할 때 `created/replayed/conflict/mismatch/bypassed/stale/complete_error`의 `Idempotency-Status`를 유지하고 replay에만 `Idempotency-Replayed: true`를 생성한다. `storage_error`에 새 HTTP status 또는 status header를 지정하지 않는다. `exposeStatusHeaders: false`이면 패키지가 생성하지 않는다. 두 관측 헤더는 명시적인 replayHeaders allowlist에도 capture/replay하지 않으며 legacy record의 헤더가 비활성화 설정을 우회하지 못한다.
+- 호환성과 진단 한계: 소비자는 event.scope→namespace로 바꾸고 원본 오류 접근을 code/operation 분기로 바꾼다. `IdempotencyEventError`, `IdempotencyStorageOperation`을 root에서 type export하며 S2 fixture에서 검증한다. 원본 오류 상세는 제공하지 않고 metric 예제는 고정 outcome만 사용한다. fingerprint callback의 scope는 별도 API이며 이 전환 대상이 아니다.
+- 회귀와 검증: `test/regression/observability-safety.spec.ts`, `observability-headers-sweep.spec.ts`에서 가짜 비밀 값을 key·body·identity·path·storage/callback/logger/sweep 오류에 넣어 전체 event와 Logger 인자를 검사한다. 각 storage 단계 동기 throw/rejection의 event 횟수, handler 결과, 레코드 보존을 대조하고 callback 실패·헤더 enable/disable·명시 allowlist·과거 저장 헤더를 확인한다. 실제 명령/결과/skip은 [S4 검증 기록](work-items/S4-observability.md)에 기록하며 이 결정만으로 검증 완료를 주장하지 않는다.
+- 후속: S5는 아직 미착수이고 D05는 OPEN, S6/D06도 미결이다. S4에서 현재 오류 경계를 보호했지만 취소/crash/결과 불명/만료 계약은 확정하지 않았다. S5/S6의 최종 상태 전이 반영 뒤 같은 관측 회귀를 재실행한다. S7은 운영 예제/0.4 전환, S8은 동일 tarball 및 최종 지원 matrix 검증으로 인수한다.
 
 ## D07 — S3에서 넘긴 전환 전제 (OPEN)
 

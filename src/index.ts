@@ -39,6 +39,8 @@ export type {
   IdempotencyFingerprintInput,
   IdempotencyFingerprintResolver,
   IdempotencyEvent,
+  IdempotencyEventError,
+  IdempotencyStorageOperation,
   IdempotencyOutcome,
   IdempotencyObservabilityOptions,
 } from './interfaces/idempotency-options.interface';

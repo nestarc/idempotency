@@ -15,6 +15,7 @@ import {
   catchError,
   concatMap,
   defaultIfEmpty,
+  defer,
   from,
   map,
   Observable,
@@ -33,6 +34,7 @@ import {
 } from './idempotency.constants';
 import { extractActualRequestPath } from './utils/request-scope';
 import { createRequestKey, isValidKeyString } from './utils/request-key';
+import { logDiagnostic } from './utils/observability';
 import { decodeReplayBody, encodeReplayBody } from './utils/replay-body';
 import { assertReplayableResponseMode } from './utils/response-mode';
 import {
@@ -44,6 +46,8 @@ import {
 import { stableJsonStringify } from './utils/stable-json';
 import type {
   IdempotencyOptions,
+  IdempotencyEvent,
+  IdempotencyStorageOperation,
   IdempotencyFingerprintResolver,
   IdempotencyObservabilityOptions,
   IdempotencyOutcome,
@@ -69,6 +73,8 @@ interface ResolvedOptions {
   replayHeaders: ReplayHeadersOption | undefined;
   observability: IdempotencyObservabilityOptions | undefined;
 }
+
+type ScopedRequestKey = ReturnType<typeof createRequestKey>;
 
 interface RequestShape {
   method?: string;
@@ -169,16 +175,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
         const scopedKey = this.applyScope(opts.scope, context, rawKey);
         return from(
-          this.resolveFingerprint(opts, context, rawKey, scopedKey, req.body),
+          this.resolveFingerprint(opts, context, rawKey, scopedKey.key, req.body),
         ).pipe(
           switchMap((fingerprint) =>
-            from(this.storage.get(scopedKey)).pipe(
-              catchError((err) => {
-                this.emitEvent(opts, 'storage_error', scopedKey, {
-                  error: err,
-                });
-                return throwError(() => err);
-              }),
+            this.observeStorage(opts, scopedKey, 'get', () => this.storage.get(scopedKey.key)).pipe(
               switchMap((existing) => {
                 if (existing) {
                   return this.handleExistingRecord(
@@ -222,7 +222,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     fingerprint: string | undefined,
     res: ResponseShape,
     opts: ResolvedOptions,
-    scopedKey: string,
+    scopedKey: ScopedRequestKey,
   ): Observable<unknown> {
     // Fingerprint mismatch takes priority over PROCESSING state —
     // IETF draft semantics (key reused with different payload → 422).
@@ -294,19 +294,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * separate from the "existing record" dispatch above.
    */
   private acquireAndRun(
-    scopedKey: string,
+    scopedKey: ScopedRequestKey,
     fingerprint: string | undefined,
     opts: ResolvedOptions,
     res: ResponseShape,
     next: CallHandler,
   ): Observable<unknown> {
-    return from(this.storage.create(scopedKey, fingerprint, opts.processingTtl)).pipe(
-      catchError((err) => {
-        this.emitEvent(opts, 'storage_error', scopedKey, {
-          error: err,
-        });
-        return throwError(() => err);
-      }),
+    return this.observeStorage(opts, scopedKey, 'create', () =>
+      this.storage.create(scopedKey.key, fingerprint, opts.processingTtl),
+    ).pipe(
       switchMap((createResult) => {
         if (!createResult.acquired || !createResult.token) {
           // We lost the race — between our initial get() and this create(),
@@ -317,7 +313,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
           // Only if the record vanished between create() and the re-read
           // (impossible in normal operation but defensive) do we fall back
           // to 409 with no better signal.
-          return from(this.storage.get(scopedKey)).pipe(
+          return this.observeStorage(opts, scopedKey, 'race_get', () => this.storage.get(scopedKey.key)).pipe(
             switchMap((raced) => {
               if (!raced) {
                 this.setIdempotencyStatus(res, opts, 'conflict');
@@ -343,7 +339,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         }
         const token = createResult.token;
 
-        return next.handle().pipe(
+        return defer(() => next.handle()).pipe(
           // Nest's ordinary HTTP response uses the final value on completion.
           // Never expose an intermediate emission as a completed operation.
           takeLast(1),
@@ -355,13 +351,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
             // Handler failure ONLY — captureResponse is total and never
             // throws storage errors up to this point. Safe to delete the
             // record and re-throw the handler's exception.
-            from(this.storage.delete(scopedKey, token)).pipe(
+            this.observeStorage(opts, scopedKey, 'delete', () => this.storage.delete(scopedKey.key, token)).pipe(
               // Even the delete is best-effort. If cleanup fails we still
               // propagate the original handler error; the record will TTL out.
-              catchError((delErr) => {
-                this.logger.warn(
-                  `storage.delete() failed during handler-error cleanup for key="${scopedKey}": ${(delErr as Error).message}. Propagating original handler error.`,
-                );
+              catchError(() => {
+                logDiagnostic(this.logger, 'cleanup_failure', this.eventContext(scopedKey));
                 return of(undefined);
               }),
               switchMap(() => throwError(() => err)),
@@ -392,7 +386,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * and cause duplicate execution on retry (pre-v0.1.3 regression).
    */
   private captureResponse(
-    scopedKey: string,
+    scopedKey: ScopedRequestKey,
     token: string,
     value: unknown,
     res: ResponseShape,
@@ -405,23 +399,21 @@ export class IdempotencyInterceptor implements NestInterceptor {
     try {
       if (alreadySent) throw new Error('HTTP response was already sent');
       serialized = encodeReplayBody(value);
-    } catch (err) {
-      this.logger.warn(
-        `Response is not replayable; retaining the PROCESSING record until its lease expires`,
-      );
+    } catch {
+      logDiagnostic(this.logger, 'response_not_replayable', this.eventContext(scopedKey));
       if (!alreadySent) this.setIdempotencyStatus(res, opts, 'bypassed');
       this.emitEvent(opts, 'bypassed', scopedKey, {
         statusCode: res.statusCode ?? 200,
-        error: err,
+        error: { code: 'response_not_replayable' },
       });
       return of(value);
     }
 
     const statusCode = res.statusCode ?? 200;
     const headers = captureReplayHeaders(res, opts.replayHeaders);
-    return from(
+    return defer(() =>
       this.storage.complete(
-        scopedKey,
+        scopedKey.key,
         token,
         { statusCode, body: serialized, headers },
         opts.ttl,
@@ -432,9 +424,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
           // Our record was evicted and replaced while the handler ran.
           // The client deserves the response we computed; we just
           // can't cache it. Log and emit.
-          this.logger.warn(
-            `Stale token when completing key="${scopedKey}" — response not cached (likely TTL eviction race)`,
-          );
+          logDiagnostic(this.logger, 'stale_completion', this.eventContext(scopedKey));
           this.setIdempotencyStatus(res, opts, 'stale');
           this.emitEvent(opts, 'stale', scopedKey, {
             statusCode,
@@ -452,14 +442,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
       // execution on retry. The PROCESSING record stays and retries see 409
       // until TTL reclaims it — the lesser evil vs. re-running a successful
       // business operation.
-      catchError((err) => {
-        this.logger.error(
-          `storage.complete() threw for key="${scopedKey}": ${(err as Error).message}. Handler succeeded; emitting value without cache. Retries will see 409 until TTL expires.`,
-        );
+      catchError(() => {
+        logDiagnostic(this.logger, 'complete_failure', this.eventContext(scopedKey));
         this.setIdempotencyStatus(res, opts, 'complete_error');
         this.emitEvent(opts, 'complete_error', scopedKey, {
           statusCode,
-          error: err,
+          error: { code: 'storage_failure', operation: 'complete' },
         });
         return of(value);
       }),
@@ -613,9 +601,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
     scope: IdempotencyScope,
     context: ExecutionContext,
     rawKey: string,
-  ): string {
+  ): ScopedRequestKey {
     if (scope === 'global') {
-      return createRequestKey(['global'], rawKey).key;
+      return createRequestKey(['global'], rawKey);
     }
     let identity: readonly string[] = [];
     if (typeof scope === 'function') {
@@ -642,7 +630,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return createRequestKey(
       ['endpoint', identity, this.computeEndpointScope(context)],
       rawKey,
-    ).key;
+    );
   }
 
   /**
@@ -706,11 +694,37 @@ export class IdempotencyInterceptor implements NestInterceptor {
       .digest('hex');
   }
 
+  /** Catch only the storage call, never downstream HTTP/handler errors. */
+  private observeStorage<T>(
+    opts: ResolvedOptions,
+    scopedKey: ScopedRequestKey,
+    operation: Exclude<IdempotencyStorageOperation, 'complete'>,
+    call: () => Promise<T>,
+  ): Observable<T> {
+    return defer(call).pipe(
+      catchError((err) => {
+        this.emitEvent(opts, 'storage_error', scopedKey, {
+          error: { code: 'storage_failure', operation },
+        });
+        return throwError(() => err);
+      }),
+    );
+  }
+
+  private eventContext(
+    scopedKey: ScopedRequestKey,
+  ): Pick<IdempotencyEvent, 'keyHash' | 'namespace'> {
+    return {
+      keyHash: createHash('sha256').update(scopedKey.key).digest('hex'),
+      namespace: scopedKey.namespace,
+    };
+  }
+
   private emitEvent(
     opts: ResolvedOptions,
     outcome: IdempotencyOutcome,
-    scopedKey: string,
-    details: { statusCode?: number; error?: unknown } = {},
+    scopedKey: ScopedRequestKey,
+    details: Pick<IdempotencyEvent, 'statusCode' | 'error'> = {},
   ): void {
     const onEvent = opts.observability?.onEvent;
     if (!onEvent) {
@@ -720,19 +734,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
     try {
       const maybePromise = onEvent({
         outcome,
-        keyHash: createHash('sha256').update(scopedKey).digest('hex'),
-        scope: scopedKey,
+        ...this.eventContext(scopedKey),
         ...details,
       });
-      void Promise.resolve(maybePromise).catch((err) => {
-        this.logger.warn(
-          `observability onEvent failed for key="${scopedKey}": ${(err as Error).message}`,
-        );
+      void Promise.resolve(maybePromise).catch(() => {
+        logDiagnostic(this.logger, 'callback_failure', this.eventContext(scopedKey));
       });
-    } catch (err) {
-      this.logger.warn(
-        `observability onEvent failed for key="${scopedKey}": ${(err as Error).message}`,
-      );
+    } catch {
+      logDiagnostic(this.logger, 'callback_failure', this.eventContext(scopedKey));
     }
   }
 
