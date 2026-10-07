@@ -70,6 +70,14 @@ See [failure recovery](docs/failure-recovery.md) and [S5 evidence](docs/1.0.0/wo
 for the distinction between real worker crashes, application-boundary rejection,
 and untested network/server failure modes.
 
+### Benchmark diagnostics
+
+Run `npm run bench:smoke` with both test-only service URLs to check the benchmark
+on Express/Fastify and Memory/Redis/Postgres. For timing samples, options, isolated
+storage cleanup and interpretation limits, see [bench/README.md](bench/README.md).
+The benchmark validates every response and fails on configured service or cleanup
+errors. Its latency measurements do not replace the package release gate.
+
 ## Changing the `IdempotencyStorage` contract
 
 If your PR modifies `src/interfaces/idempotency-storage.interface.ts`,

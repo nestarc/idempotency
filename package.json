@@ -60,8 +60,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf dist coverage",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"bench/**/*.ts\"",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"bench/**/*.ts\"",
+    "bench": "ts-node bench/idempotency.bench.ts",
+    "bench:smoke": "npm run bench -- --adapter both --iterations 5 --warmup 1 --require-services",
     "test": "jest --selectProjects unit",
     "test:failure:real": "S5_REQUIRE_REAL_STORAGE=1 jest --selectProjects unit --runInBand test/regression/failure-lifecycle.real.spec.ts",
     "test:redis": "jest --selectProjects unit --runInBand test/storage/redis.storage.real.spec.ts",

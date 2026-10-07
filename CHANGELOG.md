@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate benchmark response status, payload, replay headers and handler execution
+  before accepting latency samples. Isolate each run's Redis keys and PostgreSQL
+  schema instead of truncating the default table, and fail on service or cleanup
+  errors. Add bounded requests, Express/Fastify coverage and reproducible JSON reports.
+
 ## [1.0.0] - 2026-10-07
 
 ### Added

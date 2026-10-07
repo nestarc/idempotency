@@ -25,6 +25,6 @@
     "incremental": true,
     "types": ["node", "jest"]
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "bench/**/*"],
   "exclude": ["node_modules", "dist", "test/consumers"]
 }
