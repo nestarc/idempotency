@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Executable adoption examples for sync/async registration, connection ownership,
   serialization, authenticated tenant scope, observability and PostgreSQL sweep.
   Add payment/order/webhook recipes, a client action table and a tested
-  [0.4 → 1.0 upgrade/rollback runbook](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md).
+  [0.4 → 1.0 upgrade/rollback runbook](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/migration-1.0.md).
 
 ### Fixed
 
@@ -83,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callback failures remain isolated from request outcomes. Neither hash is an
   anonymity guarantee or suitable as a metric label.
 - Document handler-error token deletion, outer cancellation and crash recovery
-  in the [failure lifecycle guide](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md). Cancellation does
+  in the [failure lifecycle guide](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md). Cancellation does
   not detach business execution for later recording; already-started storage
   Promises may still commit without a delivered outcome. Ambiguous writes and
   lease expiry require application-owned business reconciliation.
@@ -119,7 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opaque string, including empty responses. Legacy/corrupt records return 409
   without re-execution. Custom adapters must preserve payloads unchanged.
   Old/new readers and writers must not overlap during deployment or rollback;
-  follow the [D07 migration runbook](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md). This response-body change
+  follow the [D07 migration runbook](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/migration-1.0.md). This response-body change
   itself does not alter keys; the S3 key transition above does. No schema change.
 - Added class-transformer 0.5.1 as a development dependency for Express/Fastify
   serialization regression tests. No new runtime dependency or public export.

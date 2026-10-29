@@ -63,7 +63,7 @@ Memory 런타임은 DB 드라이버 없이 두 어댑터 경로를 import할 수
 | [`redis/examples.ts`](redis/examples.ts)                 | 공식 `new RedisStorage({ client, keyPrefix })`; 모든 sync/async 모듈 등록; Nest close 뒤 외부 client PING 성공; async `connection`으로 만든 실제 client는 close 뒤 end 상태                                                                    |
 | [`postgres/examples.ts`](postgres/examples.ts)           | 공식 `new PostgresStorage({ pool })`; 모든 sync/async 모듈 등록; README sweep provider wiring compile/init/close; 동일 Pool로 실제 만료 row만 제거하고 기존 HTTP 응답 row와 유효 row 보존; Nest close 뒤 외부 Pool SELECT 성공; async `connection`으로 만든 실제 Pool은 close 뒤 종료 |
 
-Memory의 인증 토큰 목록은 테스트용 verifier다. 실제 서비스는 자신이 검증한 인증/권한 정보를 사용한다. HTTP 예제의 결제 handler는 영속 업무 원장이나 실제 결제 provider가 아니며, 업무 중복 방지와 결과 불명 조정은 [도입 recipe](../../docs/adoption-recipes.md) 및 해당 회귀 검증의 범위다. `client`/`pool`로 주입한 외부 연결은 호출자가 마지막 `quit()`/`end()`를 수행한다. fixture는 Nest 종료가 이 외부 연결을 닫지 않았음을 확인한 뒤 정리한다. `connection` 구성은 공개 `clientFactory`/`poolFactory`로 실제 생성된 연결을 관찰하고 Nest가 어댑터 소유 연결을 종료했는지 별도로 확인한다.
+Memory의 인증 토큰 목록은 테스트용 verifier다. 실제 서비스는 자신이 검증한 인증/권한 정보를 사용한다. HTTP 예제의 결제 handler는 영속 업무 원장이나 실제 결제 provider가 아니며, 업무 중복 방지와 결과 불명 조정은 [도입 recipe](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/adoption-recipes.md) 및 해당 회귀 검증의 범위다. `client`/`pool`로 주입한 외부 연결은 호출자가 마지막 `quit()`/`end()`를 수행한다. fixture는 Nest 종료가 이 외부 연결을 닫지 않았음을 확인한 뒤 정리한다. `connection` 구성은 공개 `clientFactory`/`poolFactory`로 실제 생성된 연결을 관찰하고 Nest가 어댑터 소유 연결을 종료했는지 별도로 확인한다.
 
 ## 격리와 증거
 
@@ -71,7 +71,7 @@ Memory의 인증 토큰 목록은 테스트용 verifier다. 실제 서비스는 
 
 실행 결과 디렉터리에는 tarball SHA-256, 실행 환경, Git 기준점과 working tree 상태, `summary.json`, 명령별 로그, tarball 파일 목록, 소비자별 `package-lock.json`과 설치 목록이 남는다. summary의 `nestMajor`, `peerProfile`, `versions`에 선택값과 정확한 pin을, `consumers.*.installedVersions`에 실제 설치한 직접 의존성 버전을 기록한다. HTTP 결과는 `memory-express-http`, `memory-fastify-http`로 따로 기록한다. 직접 의존성은 fixture와 공통 matrix 설정에서 고정되며 전이 의존성까지 같은 설치를 재현하려면 해당 실행에서 보존한 lockfile을 사용한다. 보존할 때 `node_modules`를 제외하고 실행 결과·lockfile·로그를 함께 수집한다.
 
-S8은 성공/기대된 실패/생략 결과와 실제 서비스 환경을 함께 인계받아 최종 지원 matrix를 다시 실행한다. 최종 증거는 [S2 작업 문서](../../docs/1.0.0/work-items/S2-consumer-package.md), [S7 작업 문서](../../docs/1.0.0/work-items/S7-adoption-docs.md), [S8 작업 문서](../../docs/1.0.0/work-items/S8-release-validation.md)에 기록한다.
+S8은 성공/기대된 실패/생략 결과와 실제 서비스 환경을 함께 인계받아 최종 지원 matrix를 다시 실행한다. 최종 증거는 [S2 작업 문서](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S2-consumer-package.md), [S7 작업 문서](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S7-adoption-docs.md), [S8 작업 문서](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S8-release-validation.md)에 기록한다.
 
 ## 검증 범위 구분
 

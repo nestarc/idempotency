@@ -37,7 +37,7 @@ npm run test:adoption
 
 `docker compose up -d --wait` starts PostgreSQL 16 and Redis 7 with health checks. The adoption command covers wiring, recipes and
 migration, then builds and installs the actual tarball for public-import examples.
-See [S7](docs/1.0.0/work-items/S7-adoption-docs.md) for evidence and limitations.
+See [S7](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S7-adoption-docs.md) for evidence and limitations.
 
 CI and release use the same reusable validation workflow: Node22/24 × Nest10/11
 × minimum/representative optional peers. Every cell runs the complete source suite
@@ -45,7 +45,7 @@ and actual-tarball consumers with both PostgreSQL 16 and Redis 7. Express and
 Fastify are exercised within each cell. Missing services, skips/todos, missing
 required specs, reduced assertion counts, consumer failures and artifact mismatch
 fail the gate. Exact versions live in `scripts/release-matrix.mjs`.
-See [S8](docs/1.0.0/work-items/S8-release-validation.md) for recorded evidence.
+See [S8](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S8-release-validation.md) for recorded evidence.
 
 ### Isolated package consumers
 
@@ -66,7 +66,7 @@ Set test-only `TEST_REDIS_URL` and `TEST_DATABASE_URL`, then run
 `npm run test:failure:real`. Both are mandatory for this command. The fixture
 uses real child-process SIGKILL, IPC gates, isolated storage namespaces and a
 PostgreSQL business ledger. Set `S5_EVIDENCE_PATH` to retain JSON observations.
-See [failure recovery](docs/failure-recovery.md) and [S5 evidence](docs/1.0.0/work-items/S5-failure-lifecycle.md)
+See [failure recovery](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md) and [S5 evidence](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S5-failure-lifecycle.md)
 for the distinction between real worker crashes, application-boundary rejection,
 and untested network/server failure modes.
 

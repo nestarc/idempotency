@@ -111,12 +111,12 @@ CI and release validation require both real PostgreSQL 16 and Redis 7, reject sk
 and install the same tarball into isolated Memory/Redis/Postgres consumers.
 Optional driver lower bounds (`ioredis` 5.0.0, `pg` and `@types/pg` 8.11.0) and
 representative versions are tested separately. Exact dependency pins, evidence
-and untested environments are recorded in [S8](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/work-items/S8-release-validation.md).
+and untested environments are recorded in [S8](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S8-release-validation.md).
 
 ## Quick start
 
 This is a local replay demonstration. For real mutations, use the
-[payments, orders and webhook recipes](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md) with durable
+[payments, orders and webhook recipes](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/adoption-recipes.md) with durable
 business IDs and authentication.
 
 ```ts
@@ -171,7 +171,7 @@ Memory is local to one process and loses records on restart.
 A duplicate `POST /payments` with the same `Idempotency-Key` header and matching
 body replays a retained, supported completed response without re-running your
 handler. A processing lease returns 409. Failures, cancellation and expiry need
-the [failure and recovery contract](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
+the [failure and recovery contract](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md).
 
 ### Three ways to wire the interceptor
 
@@ -260,7 +260,7 @@ until `processingTtl` expires; retrying after expiry can execute the operation
 again. A source error discards intermediate values and uses token-based error
 cleanup, even if business effects already committed. Subscription cancellation
 does not start completion or deletion for a later handler result; an already
-started storage Promise may still commit. See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
+started storage Promise may still commit. See [failure recovery](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md).
 
 ### Upgrading from 0.4 to 1.0
 
@@ -292,8 +292,8 @@ instances, then resume. Rollback requires the same protection for commands
 processed by the new version; old code cannot read the new keys or bodies.
 Do not use automatic dual reads, key rotation alone or bulk deletion as a migration.
 Old records generally cannot prove the tenant/user authorization required by
-the new scope. Follow the [executable migration and rollback guide](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md) and
-[D07](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/decisions.md#d07--10-전환과-롤백-decided).
+the new scope. Follow the [executable migration and rollback guide](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/migration-1.0.md) and
+[D07](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/decisions.md#d07--10-전환과-롤백-decided).
 
 ## Redis storage
 
@@ -591,7 +591,7 @@ Choose `processingTtl` to cover the intended execution window, including slow
 dependencies and pauses. Even a lease above p99 can expire while work continues.
 A retry can then acquire the key and overlap the original operation. There is
 no automatic heartbeat; use durable business deduplication and the
-[reconciliation procedure](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md#reconcile-a-payment-command).
+[reconciliation procedure](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md#reconcile-a-payment-command).
 
 ### Errors, timeouts and recovery
 
@@ -607,7 +607,7 @@ does not keep a detached subscription to record later handler results. Business
 Promises can continue, and already-started `create`/`complete`/`delete` Promises
 can still commit without delivering events or a response. HTTP disconnects do
 not necessarily unsubscribe the application chain. See the
-[transition table and timeout placement guide](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md) before
+[transition table and timeout placement guide](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md) before
 enabling automatic retries. A missing record or expired lease is not evidence
 that retrying a business operation is safe.
 
@@ -616,7 +616,7 @@ that retrying a business operation is safe.
 Use `keyResolver` when the stable key comes from a webhook event id or command
 id instead of the `Idempotency-Key` header.
 
-The [webhook recipe](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md) verifies the original raw bytes
+The [webhook recipe](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/adoption-recipes.md) verifies the original raw bytes
 in a guard, validates the event, then resolves its event ID. It also separates
 event deduplication from business deduplication and out-of-order delivery.
 Do not resolve an event ID from an unverified body or verify only in the handler:
@@ -697,8 +697,8 @@ and preservation rules. Successful cleanup and the handler error itself emit no
 additional event. A failed or ambiguous write may already have changed storage;
 an event is not proof of the final database state. Pending writes that settle
 after unsubscribe do not deliver an outcome event through the canceled chain.
-See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md) for cancellation, crash and
-reconciliation rules and [D06](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/decisions.md#d06--저장소-공통-계약-decided)
+See [failure recovery](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md) for cancellation, crash and
+reconciliation rules and [D06](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/decisions.md#d06--저장소-공통-계약-decided)
 for the completed adapter contract.
 
 `onEvent` is best-effort and is not awaited. A synchronous throw or asynchronous
@@ -829,8 +829,8 @@ command ID, identity, endpoint and intended payload stable on retries.
 
 A completed response is retained for `ttl` from completion; a PROCESSING lease
 lasts `processingTtl` from acquisition. Neither duration is a business transaction
-or the retention period of the command ledger. See [failure recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md)
-and [adoption recipes](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md) for reconciliation examples.
+or the retention period of the command ledger. See [failure recovery](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md)
+and [adoption recipes](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/adoption-recipes.md) for reconciliation examples.
 
 ## Storage adapters
 
@@ -929,7 +929,7 @@ automatic Swagger/OpenAPI integration are outside the current API.
 - **Custom fingerprints are caller-defined.** A resolver must be deterministic for the same semantic request. Non-deterministic values such as timestamps or random ids will cause false 422 mismatches.
 - **Processing TTL is a lease, not a transaction.** A short `processingTtl` helps recover stuck records, but if it is shorter than real handler execution time, a retry can acquire the key while the first request is still running.
 - **Replay requires the supported response boundary.** Register idempotency before response transformers. Unsupported values retain their PROCESSING lease and are not replayed; see the response contract and upgrade procedure above.
-- **Token CAS protects record ownership.** Expired or replaced requests cannot complete a newer record, and repeated completion cannot overwrite an established response. Work may still overlap after lease expiry; see the [failure and recovery guide](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md).
+- **Token CAS protects record ownership.** Expired or replaced requests cannot complete a newer record, and repeated completion cannot overwrite an established response. Work may still overlap after lease expiry; see the [failure and recovery guide](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md).
 
 ## Validation and release evidence
 
@@ -946,7 +946,7 @@ The [release workflow](https://github.com/nestarc/idempotency/blob/main/.github/
 22/24 × Nest 10/11 × minimum/representative peer combinations to validate one
 tarball before publication. It checks the test inventory, rejects skips and
 verifies artifact checksums. The two audit environments above do not replace that
-complete release matrix. [S8](https://github.com/nestarc/idempotency/blob/main/docs/1.0.0/work-items/S8-release-validation.md)
+complete release matrix. [S8](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/1.0.0/work-items/S8-release-validation.md)
 records the release procedure and prior evidence.
 
 The [2026-10-07 CI run](https://github.com/nestarc/idempotency/actions/runs/37633224775)
@@ -962,9 +962,9 @@ measurement limits](https://github.com/nestarc/idempotency/blob/main/bench/READM
 ## Documentation and contributing
 
 - [Changelog](./CHANGELOG.md): breaking changes and version history.
-- [Adoption recipes](https://github.com/nestarc/idempotency/blob/main/docs/adoption-recipes.md): payments, orders and signed webhooks.
-- [Failure and recovery](https://github.com/nestarc/idempotency/blob/main/docs/failure-recovery.md): cancellation, storage outages and reconciliation.
-- [Upgrade and rollback](https://github.com/nestarc/idempotency/blob/main/docs/migration-1.0.md): the 0.4 → 1.0 transition.
+- [Adoption recipes](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/adoption-recipes.md): payments, orders and signed webhooks.
+- [Failure and recovery](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/failure-recovery.md): cancellation, storage outages and reconciliation.
+- [Upgrade and rollback](https://github.com/nestarc/idempotency/blob/5dca8af4ef66bf861cd7e264c6975ab2a3f9ab62/docs/migration-1.0.md): the 0.4 → 1.0 transition.
 - [Contributing](https://github.com/nestarc/idempotency/blob/main/CONTRIBUTING.md): development, tests and release checks.
 - [Report a bug](https://github.com/nestarc/idempotency/issues/new?template=bug_report.yml): include versions and a minimal reproduction; remove secrets and customer data.
 
